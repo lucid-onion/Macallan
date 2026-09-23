@@ -1,0 +1,298 @@
+/* ==========================================================================
+   index.css — the single Tailwind entry for the React app.
+   Loaded once from src/main.jsx. Contains:
+     1. Tailwind directives
+     2. Design tokens (CSS variables; consumed by tailwind.config.js)
+     3. Base element resets that can't be expressed as utilities
+     4. .nav-link.active compatibility rule (used by React Router NavLink)
+     5. Print rules for vouchers + A4 documents
+   ========================================================================== */
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* --------------------------------------------------------------------------
+   1. Design tokens
+   Light theme is the default. Dark theme is toggled by setting
+   data-theme="dark" on <html>, matching the pattern in the rest of the app.
+   -------------------------------------------------------------------------- */
+:root {
+  /* Neutrals */
+  --ink: #16181c;
+  --ink-soft: #52565f;
+  --ink-faint: #858993;
+  --line: #e3e4e8;
+  --line-soft: #edeef1;
+  --surface: #ffffff;
+  --surface-sunken: #f6f7f8;
+  --sidebar-bg: #14161a;
+  --sidebar-bg-raised: #1d2026;
+  --sidebar-text: #9aa0ab;
+
+  /* Steel-blue accent */
+  --steel: #3d6b8a;
+  --steel-dark: #2b4c63;
+  --steel-tint: #eaf1f5;
+
+  /* Status colors */
+  --positive: #1c7c4c;
+  --positive-tint: #e9f6ef;
+  --warning: #a15c07;
+  --warning-tint: #fbf1e0;
+  --negative: #b3261e;
+  --negative-tint: #fbebea;
+
+  /* Type */
+  --font-ui: "Noto Sans", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  --font-np: "Noto Sans Devanagari", var(--font-ui);
+}
+
+html[data-theme="dark"] {
+  --ink: #eef0f3;
+  --ink-soft: #b7bcc6;
+  --ink-faint: #868da0;
+  --line: #2b2e35;
+  --line-soft: #23262c;
+  --surface: #1b1d22;
+  --surface-sunken: #141518;
+  --sidebar-bg: #0e0f12;
+  --sidebar-bg-raised: #1a1c21;
+  --sidebar-text: #8a8f9b;
+  --steel: #5a90b3;
+  --steel-dark: #3d6b8a;
+  --steel-tint: #1e2c34;
+  --positive-tint: #113023;
+  --warning-tint: #33270e;
+  --negative-tint: #33191a;
+}
+
+/* --------------------------------------------------------------------------
+   2. Base resets
+   Tailwind's preflight handles most of this, but a few things must stay
+   because they touch the document root, are set globally, or apply to
+   elements the app renders dynamically (e.g. from innerHTML templates).
+   -------------------------------------------------------------------------- */
+* { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  padding: 0;
+  height: 100%;
+}
+
+body {
+  font-family: var(--font-ui);
+  color: var(--ink);
+  background: var(--surface-sunken);
+  font-size: 14px;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+a {
+  color: inherit;
+  text-decoration: none;
+}
+
+button {
+  font-family: inherit;
+  cursor: pointer;
+}
+
+h1, h2, h3, h4 {
+  margin: 0;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+
+:focus-visible {
+  outline: 2px solid var(--steel);
+  outline-offset: 2px;
+}
+
+/* Devanagari numeric helper — matches the `.np` class used by date cells. */
+.np {
+  font-family: var(--font-np);
+}
+
+/* --------------------------------------------------------------------------
+   3. React Router NavLink active state
+   NavLink applies className via a callback that returns either a plain
+   string or a template with conditionals. Rather than rebuilding the whole
+   class list every time, we toggle `.nav-link.active` — one tiny rule, one
+   truthy class.
+   -------------------------------------------------------------------------- */
+.nav-link.active {
+  background: var(--steel-dark);
+  color: #ffffff;
+}
+
+/* Sidebar nav hover state (mirrors the original .sidebar-nav a:hover) */
+.nav-link:hover {
+  background: var(--sidebar-bg-raised);
+  color: #ffffff;
+}
+
+/* --------------------------------------------------------------------------
+   4. Print — voucher + A4 document system
+   -------------------------------------------------------------------------- */
+#print-voucher { display: none; }
+
+@media print {
+  /* ---- Voucher printing (unchanged) ---- */
+  body.printing-voucher > *:not(#print-voucher) { display: none !important; }
+  body.printing-voucher #print-voucher { display: block !important; }
+  body.printing-voucher { background: #ffffff !important; }
+
+  /* ---- Reports ---- */
+
+  /* Page geometry */
+  @page {
+    size: A4 portrait;
+    margin: 10mm 8mm;
+  }
+
+  html, body {
+    background: #ffffff !important;
+    height: auto !important;
+    overflow: visible !important;
+    font-size: 11px !important;
+  }
+
+  /* The nuclear option: hide every visible element, then reveal the report
+     and the print-only header. This survives any nesting, flex layout, or
+     higher-specificity utility class on the sidebar/topbar. */
+  body * {
+    visibility: hidden !important;
+  }
+  body .report-card,
+  body .report-card * {
+    visibility: visible !important;
+  }
+  body .print-only,
+  body .print-only * {
+    visibility: visible !important;
+  }
+
+  /* Explicitly remove chrome from the layout so it can't leave an empty
+     gap where it used to be. */
+  .sidebar,
+  .sidebar-overlay,
+  .topbar,
+  .filter-bar,
+  .no-print,
+  .print-hidden,
+  [data-print-hide],
+  footer,
+  nav,
+  aside {
+    display: none !important;
+  }
+
+  /* Collapse the flex shells so the report gets the full page width. */
+  .app-shell { display: block !important; }
+  .main { display: block !important; }
+  .page {
+    display: block !important;
+    padding: 0 !important;
+    margin: 0 !important;
+    max-width: none !important;
+    width: 100% !important;
+  }
+
+  /* Position the report and header at the top-left of the sheet. */
+  .report-card {
+    position: absolute !important;
+    left: 0 !important;
+    top: 40px !important;
+    right: 0 !important;
+    width: 100% !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    border: 0 !important;
+    box-shadow: none !important;
+    background: #ffffff !important;
+  }
+  .print-only {
+    position: absolute !important;
+    left: 0 !important;
+    top: 0 !important;
+    width: 100% !important;
+    display: block !important;
+    padding: 0 !important;
+    margin: 0 !important;
+  }
+  .print-only h1 {
+    font-size: 14px !important;
+    font-weight: 700 !important;
+    margin: 0 0 2px !important;
+  }
+  .print-only .meta {
+    font-size: 10px !important;
+    color: #333 !important;
+    margin: 0 0 6px !important;
+  }
+
+  /* Table: compact, one border per cell, repeat header per page */
+  .report-card table {
+    width: 100% !important;
+    min-width: 0 !important;
+    border-collapse: collapse !important;
+    font-size: 9.5px !important;
+    table-layout: auto !important;
+  }
+  .report-card thead { display: table-header-group !important; }
+  .report-card tr { page-break-inside: avoid !important; }
+  .report-card th,
+  .report-card td {
+    padding: 3px 5px !important;
+    border: 1px solid #c9c9c9 !important;
+    white-space: normal !important;
+    line-height: 1.25 !important;
+    color: #111 !important;
+    background: transparent !important;
+  }
+  .report-card thead th {
+    background: #efefef !important;
+    font-weight: 600 !important;
+    text-transform: uppercase !important;
+    font-size: 8.5px !important;
+    letter-spacing: 0.03em !important;
+  }
+
+  /* Summary cells: one tight row across the top of the sheet */
+  .report-card .report-summary {
+    display: grid !important;
+    grid-template-columns: repeat(5, 1fr) !important;
+    gap: 3px !important;
+    margin: 0 0 6px !important;
+  }
+  .report-card .report-summary > div {
+    border: 1px solid #c9c9c9 !important;
+    background: #fafafa !important;
+    padding: 3px 5px !important;
+    border-radius: 0 !important;
+  }
+  .report-card .report-summary .label {
+    font-size: 8px !important;
+    margin-bottom: 0 !important;
+    color: #555 !important;
+  }
+  .report-card .report-summary .value {
+    font-size: 10.5px !important;
+    font-weight: 600 !important;
+  }
+}
+
+/* Non-print: hide the print-only header */
+.print-only { display: none; }
+
+/* --------------------------------------------------------------------------
+   5. Chart.js canvas sizing — the dashboard relies on these max-heights, so
+      it's easier to set them here than to repeat a utility on every canvas.
+   -------------------------------------------------------------------------- */
+canvas {
+  max-height: 240px;
+}
