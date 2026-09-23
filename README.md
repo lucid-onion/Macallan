@@ -1,4 +1,4 @@
-# ASN Demolition — Inventory & Sales Management System
+# ASN
 
 A role-based inventory, sales, and cash-ledger system for **ASN Demolition Pvt.Ltd**.
 Node.js + Express + PostgreSQL backend, React + Vite + Tailwind frontend, with a team-inherited permission model.
