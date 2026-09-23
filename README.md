@@ -110,80 +110,105 @@ Teams are managed at `/teams` in the UI (ADMIN and SUPER_ADMIN only).
 
 ## Project Structure
 
+```text
 asn-erp/
 ├── package.json
 ├── README.md
+│
 ├── server/
-│ ├── package.json
-│ ├── .env
-│ ├── db/migrations/
-│ │ ├── 001_init.sql
-│ │ └── 002_seed.sql
-│ └── src/
-│ ├── server.js
-│ ├── app.js
-│ ├── config/db.js
-│ ├── middleware/
-│ │ ├── auth.js
-│ │ └── rbac.js
-│ ├── utils/
-│ │ ├── errors.js
-│ │ └── audit.js
-│ └── modules/
-│ ├── auth/routes.js
-│ ├── users/routes.js
-│ ├── teams/routes.js
-│ ├── catalog/routes.js
-│ ├── settings/routes.js
-│ └── business/
-│ ├── _crud.js
-│ ├── suppliers.js
-│ ├── customers.js
-│ ├── inventory.js
-│ ├── purchases.js
-│ ├── sales.js
-│ ├── transportation.js
-│ ├── transactions.js
-│ ├── office_expenses.js
-│ ├── demolition.js
-│ └── reports.js
+│   ├── package.json
+│   ├── .env
+│   ├── .env.example
+│   │
+│   ├── db/
+│   │   └── migrations/
+│   │       ├── 001_init.sql
+│   │       └── 002_seed.sql
+│   │
+│   └── src/
+│       ├── server.js
+│       ├── app.js
+│       │
+│       ├── config/
+│       │   └── db.js
+│       │
+│       ├── middleware/
+│       │   ├── auth.js
+│       │   └── rbac.js
+│       │
+│       ├── utils/
+│       │   ├── errors.js
+│       │   └── audit.js
+│       │
+│       └── modules/
+│           ├── auth/
+│           │   └── routes.js
+│           ├── users/
+│           │   └── routes.js
+│           ├── teams/
+│           │   └── routes.js
+│           ├── catalog/
+│           │   └── routes.js
+│           ├── settings/
+│           │   └── routes.js
+│           └── business/
+│               ├── _crud.js
+│               ├── suppliers.js
+│               ├── customers.js
+│               ├── inventory.js
+│               ├── purchases.js
+│               ├── sales.js
+│               ├── transportation.js
+│               ├── transactions.js
+│               ├── office_expenses.js
+│               ├── demolition.js
+│               └── reports.js
+│
 └── client/
-├── package.json
-├── index.html
-├── vite.config.js
-├── tailwind.config.js
-├── postcss.config.js
-└── src/
-├── main.jsx
-├── index.css
-├── api/client.js
-├── auth/AuthContext.jsx
-├── router/
-│ ├── AppRouter.jsx
-│ └── ProtectedRoute.jsx
-├── layouts/AppLayout.jsx
-├── components/
-│ ├── ui.jsx
-│ └── DataTable.jsx
-└── pages/
-  ├── Login.jsx
-  ├── Dashboard.jsx
-  ├── Inventory.jsx
-  ├── Purchases.jsx
-  ├── Sales.jsx
-  ├── Transportation.jsx
-  ├── Suppliers.jsx
-  ├── Customers.jsx
-  ├── Transactions.jsx
-  ├── OfficeExpenses.jsx
-  ├── Demolition.jsx
-  ├── Reports.jsx
-  ├── Settings.jsx
-  ├── Users.jsx
-  └── Teams.jsx
-
-
----
+    ├── package.json
+    ├── index.html
+    ├── vite.config.js
+    ├── tailwind.config.js
+    ├── postcss.config.js
+    │
+    └── src/
+        ├── main.jsx
+        ├── index.css
+        │
+        ├── api/
+        │   └── client.js
+        │
+        ├── auth/
+        │   └── AuthContext.jsx
+        │
+        ├── router/
+        │   ├── AppRouter.jsx
+        │   └── ProtectedRoute.jsx
+        │
+        ├── layouts/
+        │   └── AppLayout.jsx
+        │
+        ├── components/
+        │   ├── ui.jsx
+        │   └── DataTable.jsx
+        │
+        └── pages/
+            ├── Login.jsx
+            ├── Dashboard.jsx
+            ├── Inventory.jsx
+            ├── Purchases.jsx
+            ├── Sales.jsx
+            ├── Transportation.jsx
+            ├── Suppliers.jsx
+            ├── Customers.jsx
+            ├── Transactions.jsx
+            ├── OfficeExpenses.jsx
+            ├── Demolition.jsx
+            ├── Reports.jsx
+            ├── Settings.jsx
+            ├── Users.jsx
+            └── Teams.jsx
+```
 
 ## Getting Started
 
