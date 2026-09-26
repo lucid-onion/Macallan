@@ -25,6 +25,16 @@ const EMPTY_FORM = {
   rate: "",
   status: "Delivered",
   company: "ASN Demolition Pvt.Ltd",
+
+  transport_fee: "0",
+  labor_charge: "0",
+  road_expense: "0",
+  tax_gbse: "0",
+  truck_no: "",
+  truck_driver: "",
+  truck_driver_phone: "",
+  from_location: "",
+  to_location: "",
 };
 
 function num(v) { const n = Number(v); return isFinite(n) ? n : 0; }
