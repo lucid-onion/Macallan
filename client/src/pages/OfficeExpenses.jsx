@@ -1,29 +1,25 @@
-/* ==========================================================================
-   OfficeExpenses.jsx — daily office expense slips.
-   Each slip holds N line items { description, amount }, added dynamically.
-   ========================================================================== */
 import { useEffect, useMemo, useState } from "react";
 import { api } from "../api/client";
 import { useAuth } from "../auth/AuthContext";
 import {
-  Button, Modal, Field, ConfirmDialog, PageHeader,
-  inputCls, selectCls,
+  Button, Modal, Field, ConfirmDialog, PageHeader, inputCls,
 } from "../components/ui";
 import DataTable from "../components/DataTable";
+import { bsToday, bsToAdString, adToBs, formatBs } from "../lib/nepali-date";
 
-const today = new Date();
+const todayBs = bsToday();
 
 const EMPTY_FORM = {
-  date_bs_year: 2082,
-  date_bs_month: 1,
-  date_bs_day: 1,
-  date_ad: today.toISOString().slice(0, 10),
+  date_bs_year: todayBs.year,
+  date_bs_month: todayBs.month,
+  date_bs_day: todayBs.day,
+  date_ad: bsToAdString(todayBs),
   company: "ASN Demolition Pvt.Ltd",
   note: "",
   items: [{ description: "", amount: "" }],
 };
 
-function num(v) { const n = Number(v); return isFinite(n) ? n : 0; }
+const num = (v) => { const n = Number(v); return isFinite(n) ? n : 0; };
 
 export default function OfficeExpenses() {
   const { has } = useAuth();
@@ -34,7 +30,6 @@ export default function OfficeExpenses() {
   const [rows, setRows] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
-
   const [search, setSearch] = useState("");
 
   const [showForm, setShowForm] = useState(false);
@@ -50,7 +45,7 @@ export default function OfficeExpenses() {
     setLoading(true); setError(null);
     try {
       const { items } = await api.get("/api/office-expenses");
-      setRows(items);
+      setRows(items || []);
     } catch (e) {
       setError(e.message || "Failed to load office expenses");
     } finally {
@@ -63,7 +58,7 @@ export default function OfficeExpenses() {
     const q = search.trim().toLowerCase();
     return rows.filter((r) => {
       if (!q) return true;
-      const inItems = (r.items || []).some(it => it.description?.toLowerCase().includes(q));
+      const inItems = (r.items || []).some((it) => it.description?.toLowerCase().includes(q));
       return r.note?.toLowerCase().includes(q) || inItems;
     });
   }, [rows, search]);
@@ -80,18 +75,35 @@ export default function OfficeExpenses() {
     ];
   }, [rows]);
 
-  // ---- Items helpers ----------------------------------------------------
+  // Live "date_ad" preview when BS changes
+  useEffect(() => {
+    if (!showForm) return;
+    const y = Number(form.date_bs_year);
+    const m = Number(form.date_bs_month);
+    const d = Number(form.date_bs_day);
+    if (y && m && d) {
+      try {
+        const adStr = bsToAdString({ year: y, month: m, day: d });
+        if (adStr !== form.date_ad) setForm((f) => ({ ...f, date_ad: adStr }));
+      } catch { /* invalid BS combo */ }
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [form.date_bs_year, form.date_bs_month, form.date_bs_day, showForm]);
+
   function addItem() {
-    setForm(f => ({ ...f, items: [...f.items, { description: "", amount: "" }] }));
+    setForm((f) => ({ ...f, items: [...f.items, { description: "", amount: "" }] }));
   }
   function removeItem(i) {
-    setForm(f => {
+    setForm((f) => {
       const next = f.items.filter((_, idx) => idx !== i);
       return { ...f, items: next.length ? next : [{ description: "", amount: "" }] };
     });
   }
   function updateItem(i, patch) {
-    setForm(f => ({ ...f, items: f.items.map((it, idx) => idx === i ? { ...it, ...patch } : it) }));
+    setForm((f) => ({
+      ...f,
+      items: f.items.map((it, idx) => (idx === i ? { ...it, ...patch } : it)),
+    }));
   }
 
   const computedTotal = useMemo(
@@ -99,7 +111,6 @@ export default function OfficeExpenses() {
     [form.items]
   );
 
-  // ---- Open / save ------------------------------------------------------
   function openCreate() {
     setEditing(null);
     setForm({ ...EMPTY_FORM, items: [{ description: "", amount: "" }] });
@@ -109,14 +120,14 @@ export default function OfficeExpenses() {
   function openEdit(row) {
     setEditing(row);
     setForm({
-      date_bs_year: row.date_bs_year || 2082,
-      date_bs_month: row.date_bs_month || 1,
-      date_bs_day: row.date_bs_day || 1,
-      date_ad: row.date_ad ? String(row.date_ad).slice(0, 10) : today.toISOString().slice(0, 10),
+      date_bs_year: row.date_bs_year,
+      date_bs_month: row.date_bs_month,
+      date_bs_day: row.date_bs_day,
+      date_ad: row.date_ad ? String(row.date_ad).slice(0, 10) : bsToAdString(bsToday()),
       company: row.company || "",
       note: row.note || "",
       items: (row.items && row.items.length
-        ? row.items.map(it => ({ description: it.description, amount: String(it.amount) }))
+        ? row.items.map((it) => ({ description: it.description, amount: String(it.amount) }))
         : [{ description: "", amount: "" }]),
     });
     setFormError(null);
@@ -127,10 +138,13 @@ export default function OfficeExpenses() {
     e.preventDefault(); setSaving(true); setFormError(null);
     try {
       const items = form.items
-        .map(it => ({ description: (it.description || "").trim(), amount: num(it.amount) }))
-        .filter(it => it.description && it.amount > 0);
+        .map((it) => ({ description: (it.description || "").trim(), amount: num(it.amount) }))
+        .filter((it) => it.description && it.amount > 0);
 
-      if (!items.length) { setFormError("Add at least one line item with a description and amount."); return; }
+      if (!items.length) {
+        setFormError("Add at least one line item with a description and amount.");
+        return;
+      }
 
       const payload = {
         date_bs_year: Number(form.date_bs_year),
@@ -143,14 +157,10 @@ export default function OfficeExpenses() {
       };
 
       if (editing) {
-        // Server supports updating parent fields only (company/note) for now;
-        // items are treated as immutable once saved. Tell the user.
-        if (editing) {
-          await api.patch(`/api/office-expenses/${editing.id}`, {
-            company: payload.company,
-            note: payload.note,
-          });
-        }
+        await api.patch(`/api/office-expenses/${editing.id}`, {
+          company: payload.company,
+          note: payload.note,
+        });
       } else {
         await api.post("/api/office-expenses", payload);
       }
@@ -178,34 +188,28 @@ export default function OfficeExpenses() {
   }
 
   const columns = [
-    { key: "date_bs", label: "Date (BS)",
-      render: (r) => `${r.date_bs_year}/${String(r.date_bs_month).padStart(2, "0")}/${String(r.date_bs_day).padStart(2, "0")}` },
-    { key: "date_ad", label: "Date (EN)",
-      render: (r) => r.date_ad ? String(r.date_ad).slice(0, 10) : "—" },
+    { key: "date_bs", label: "Date (BS)", render: (r) => formatBs(r) },
+    { key: "date_ad", label: "Date (EN)", render: (r) => r.date_ad ? String(r.date_ad).slice(0, 10) : "—" },
     { key: "company", label: "Company", render: (r) => r.company || "—" },
-    { key: "items", label: "Items",
-      render: (r) => {
-        const summary = (r.items || []).map(i => i.description).join(", ");
-        return summary.length > 60 ? summary.slice(0, 57) + "…" : summary || "—";
-      } },
-    { key: "count", label: "Lines", numeric: true,
-      render: (r) => (r.items || []).length },
-    { key: "total", label: "Total", numeric: true,
-      render: (r) => `Rs. ${num(r.total).toLocaleString("en-IN")}` },
+    { key: "items", label: "Items", render: (r) => {
+      const summary = (r.items || []).map((i) => i.description).join(", ");
+      return summary.length > 60 ? summary.slice(0, 57) + "…" : summary || "—";
+    } },
+    { key: "count", label: "Lines", numeric: true, render: (r) => (r.items || []).length },
+    { key: "total", label: "Total", numeric: true, render: (r) => `Rs. ${num(r.total).toLocaleString("en-IN")}` },
     { key: "note", label: "Note", render: (r) => r.note || "—" },
-    { key: "actions", label: "",
-      render: (r) => (
-        <div className="flex gap-1.5 justify-end">
-          {canUpdate && (
-            <button type="button" onClick={(e) => { e.stopPropagation(); openEdit(r); }}
-              className="text-steel text-xs hover:underline">Edit</button>
-          )}
-          {canDelete && (
-            <button type="button" onClick={(e) => { e.stopPropagation(); setToDelete(r); }}
-              className="text-negative text-xs hover:underline">Delete</button>
-          )}
-        </div>
-      ) },
+    { key: "actions", label: "", render: (r) => (
+      <div className="flex gap-1.5 justify-end">
+        {canUpdate && (
+          <button type="button" onClick={(e) => { e.stopPropagation(); openEdit(r); }}
+            className="text-steel text-xs hover:underline">Edit</button>
+        )}
+        {canDelete && (
+          <button type="button" onClick={(e) => { e.stopPropagation(); setToDelete(r); }}
+            className="text-negative text-xs hover:underline">Delete</button>
+        )}
+      </div>
+    ) },
   ];
 
   return (
@@ -277,23 +281,34 @@ export default function OfficeExpenses() {
             <div className="grid grid-cols-2 gap-3.5 mb-5 max-[560px]:grid-cols-1">
               <Field label="Date (BS Year)">
                 <input type="number" min="2000" max="2200" className={inputCls} value={form.date_bs_year}
-                  onChange={(e) => setForm(f => ({ ...f, date_bs_year: e.target.value }))} />
+                  onChange={(e) => setForm((f) => ({ ...f, date_bs_year: e.target.value }))} />
               </Field>
               <Field label="Date (BS Month 1-12)">
                 <input type="number" min="1" max="12" className={inputCls} value={form.date_bs_month}
-                  onChange={(e) => setForm(f => ({ ...f, date_bs_month: e.target.value }))} />
+                  onChange={(e) => setForm((f) => ({ ...f, date_bs_month: e.target.value }))} />
               </Field>
               <Field label="Date (BS Day)">
                 <input type="number" min="1" max="32" className={inputCls} value={form.date_bs_day}
-                  onChange={(e) => setForm(f => ({ ...f, date_bs_day: e.target.value }))} />
+                  onChange={(e) => setForm((f) => ({ ...f, date_bs_day: e.target.value }))} />
               </Field>
-              <Field label="Date (AD)">
+              <Field label="Date (AD)" hint="auto-computed from BS">
                 <input type="date" className={inputCls} value={form.date_ad}
-                  onChange={(e) => setForm(f => ({ ...f, date_ad: e.target.value }))} />
+                  onChange={(e) => {
+                    const ad = e.target.value;
+                    setForm((f) => ({ ...f, date_ad: ad }));
+                    // Sync BS from AD
+                    try {
+                      const d = new Date(ad);
+                      if (!isNaN(d)) {
+                        const bs = adToBs(d);
+                        setForm((f) => ({ ...f, date_bs_year: bs.year, date_bs_month: bs.month, date_bs_day: bs.day, date_ad: ad }));
+                      }
+                    } catch { /* ignore */ }
+                  }} />
               </Field>
               <Field label="Company" span={2}>
                 <input className={inputCls} value={form.company}
-                  onChange={(e) => setForm(f => ({ ...f, company: e.target.value }))} />
+                  onChange={(e) => setForm((f) => ({ ...f, company: e.target.value }))} />
               </Field>
             </div>
 
@@ -303,27 +318,15 @@ export default function OfficeExpenses() {
             <div className="flex flex-col gap-2 mb-3">
               {form.items.map((it, i) => (
                 <div key={i} className="grid grid-cols-[1fr_140px_34px] gap-2 items-center">
-                  <input
-                    className={inputCls}
-                    placeholder="Description (e.g. Kitchen)"
+                  <input className={inputCls} placeholder="Description (e.g. Kitchen)"
                     value={it.description}
-                    onChange={(e) => updateItem(i, { description: e.target.value })}
-                  />
-                  <input
-                    className={inputCls}
-                    type="number" min="0" step="0.01"
-                    placeholder="Amount"
+                    onChange={(e) => updateItem(i, { description: e.target.value })} />
+                  <input className={inputCls} type="number" min="0" step="0.01" placeholder="Amount"
                     value={it.amount}
-                    onChange={(e) => updateItem(i, { amount: e.target.value })}
-                  />
-                  <button
-                    type="button"
-                    onClick={() => removeItem(i)}
+                    onChange={(e) => updateItem(i, { amount: e.target.value })} />
+                  <button type="button" onClick={() => removeItem(i)}
                     className="text-ink-faint hover:text-negative w-[34px] h-[34px] rounded-sm border border-transparent hover:border-negative-tint hover:bg-negative-tint flex items-center justify-center text-sm"
-                    title="Remove row"
-                  >
-                    ✕
-                  </button>
+                    title="Remove row">✕</button>
                 </div>
               ))}
             </div>
@@ -336,7 +339,7 @@ export default function OfficeExpenses() {
 
             <Field label="Note (optional)" span={2}>
               <input className={inputCls} value={form.note}
-                onChange={(e) => setForm(f => ({ ...f, note: e.target.value }))}
+                onChange={(e) => setForm((f) => ({ ...f, note: e.target.value }))}
                 placeholder="Anything worth remembering about this slip" />
             </Field>
           </form>

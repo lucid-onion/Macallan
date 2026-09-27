@@ -14,6 +14,7 @@ import { audit } from "../../utils/audit.js";
 import { notFound } from "../../utils/errors.js";
 
 const router = Router();
+const nullableStr = (max) => z.string().max(max).nullable().optional();
 router.use(requireAuth);
 
 const schema = z.object({
@@ -107,5 +108,6 @@ router.delete("/:id", requirePermission("transactions", "delete"), async (req, r
     res.json({ ok: true });
   } catch (e) { next(e); }
 });
+
 
 export default router;

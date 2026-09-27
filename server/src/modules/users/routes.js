@@ -28,7 +28,7 @@ const createSchema = z.object({
 router.get("/", requirePermission("users", "view"), async (req, res, next) => {
   try {
     const params = [];
-    let where = "WHERE u.deleted_at IS NULL";
+    let where = "WHERE TRUE";
     if (req.user.role === "ADMIN") {
       where += " AND u.team_id = $1";
       params.push(req.user.teamId);

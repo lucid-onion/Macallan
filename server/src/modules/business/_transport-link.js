@@ -1,5 +1,10 @@
 ﻿import { query } from "../../config/db.js";
 
+/**
+ * Creates the transportation row that mirrors a purchase or sale's truck
+ * details. Called from the purchases/sales POST handlers. Returns the new
+ * row, or null if the source record didn't carry any transport info.
+ */
 export async function createLinkedTransport({ kind, source }) {
   const {
     id,
@@ -7,6 +12,8 @@ export async function createLinkedTransport({ kind, source }) {
     transport_fee, labor_charge, road_expense, tax_gbse,
     truck_no, truck_driver, truck_driver_phone,
     from_location, to_location,
+    loader_name,              // purchases use this
+    loader,                   // sales may use this
     customer_id,
     net_qty,
     status,
@@ -21,7 +28,7 @@ export async function createLinkedTransport({ kind, source }) {
   const hasData =
     totalCost > 0 ||
     truck_no || truck_driver || truck_driver_phone ||
-    from_location || to_location;
+    from_location || to_location || loader_name || loader;
   if (!hasData) return null;
 
   const saleId     = kind === "sale"     ? id : null;
@@ -43,7 +50,7 @@ export async function createLinkedTransport({ kind, source }) {
       truck_no || null,
       truck_driver || null,
       truck_driver_phone || null,
-      null,
+      loader_name || loader || null,          // ← fix: read loader_name too
       from_location || null,
       to_location || null,
       Number(net_qty) || 0,
