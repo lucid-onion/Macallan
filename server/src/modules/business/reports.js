@@ -44,7 +44,7 @@ function num(v) { const x = Number(v); return isFinite(x) ? x : 0; }
 /* -------------------------------------------------------------------------
    Common query — every business table shares the same date columns, so we
    can filter them the same way. Pass a `table` name (no alias) for the
-   simple reports; the join-requiring ones use raw SQL below.
+   simple reports; join-requiring reports use raw SQL below.
    ------------------------------------------------------------------------- */
 async function fetchAll(table, filters = {}) {
   const params = [];
@@ -70,11 +70,26 @@ function parseFilters(req) {
 
 /* -------------------------------------------------------------------------
    Dashboard summary
+   --------------------------------------------------------------------------
+   Company Balance is computed as:
+
+       opening
+       + Σ sales
+       − Σ purchases
+       − Σ transportation
+       − Σ office_expenses
+       − Σ demolitions
+
+   (i.e. "value of goods bought and sold so far", not a cash ledger.)
+
+   The Transactions ledger is still fetched for the "recent" strip at the
+   bottom of the dashboard, but it no longer drives the balance card.
    ------------------------------------------------------------------------- */
 router.get("/dashboard-summary", requirePermission("dashboard", "view"), async (req, res, next) => {
   try {
     const f = parseFilters(req);
 
+    // Build the same period filter clause for each table.
     function whereFor(alias = "") {
       const p = alias ? `${alias}.` : "";
       const params = [];
@@ -86,12 +101,18 @@ router.get("/dashboard-summary", requirePermission("dashboard", "view"), async (
       return { clause: where.join(" AND "), params };
     }
 
+    // Opening balance — from the single-row `settings` JSON value.
+    const settingsRow = await query(`SELECT value FROM settings WHERE key = 'company'`);
+    const openingBalance = Number(settingsRow.rows[0]?.value?.openingBalance) || 0;
+
     const sW = whereFor();
     const pW = whereFor();
     const tW = whereFor();
     const lW = whereFor();
+    const oW = whereFor();
+    const dW = whereFor();
 
-    const [s, p, t, l] = await Promise.all([
+    const [s, p, t, l, o, d] = await Promise.all([
       query(
         `SELECT COALESCE(SUM(total),0) AS total, COUNT(*)::int AS count
            FROM sales WHERE ${sW.clause}`,
@@ -108,12 +129,37 @@ router.get("/dashboard-summary", requirePermission("dashboard", "view"), async (
            FROM transportation WHERE ${tW.clause}`,
         tW.params
       ),
+      // Kept for the "recent" strip; not used for the balance card.
       query(
-        `SELECT COALESCE(SUM(CASE WHEN direction='in' THEN amount ELSE -amount END),0) AS balance
+        `SELECT COALESCE(SUM(CASE WHEN direction='in' THEN amount ELSE -amount END),0) AS net
            FROM transactions WHERE ${lW.clause}`,
         lW.params
       ),
+      query(
+        `SELECT COALESCE(SUM(total),0) AS total
+           FROM office_expenses WHERE ${oW.clause}`,
+        oW.params
+      ),
+      query(
+        `SELECT COALESCE(SUM(total),0) AS total
+           FROM demolitions WHERE ${dW.clause}`,
+        dW.params
+      ),
     ]);
+
+    const salesTotal      = num(s.rows[0].total);
+    const purchasesTotal  = num(p.rows[0].total);
+    const transportTotal  = num(t.rows[0].total);
+    const officeTotal     = num(o.rows[0].total);
+    const demolitionTotal = num(d.rows[0].total);
+
+    const netBalance =
+      openingBalance
+      + salesTotal
+      - purchasesTotal
+      - transportTotal
+      - officeTotal
+      - demolitionTotal;
 
     const recent = (
       await query(`
@@ -145,13 +191,12 @@ router.get("/dashboard-summary", requirePermission("dashboard", "view"), async (
       status: r.status,
     }));
 
-    const a = s.rows[0], b = p.rows[0], c = t.rows[0], d = l.rows[0];
     res.json({
       cards: [
-        { label: "Total Sales",     value: rupees(a.total),   meta: `${a.count} transactions` },
-        { label: "Total Purchases", value: rupees(b.total),   meta: `${b.count} purchases` },
-        { label: "Transportation",  value: rupees(c.total),   meta: `${c.count} deliveries` },
-        { label: "Company Balance", value: rupees(d.balance), meta: "cash position" },
+        { label: "Total Sales",     value: rupees(salesTotal),      meta: `${s.rows[0].count} transactions` },
+        { label: "Total Purchases", value: rupees(purchasesTotal),  meta: `${p.rows[0].count} purchases` },
+        { label: "Transportation",  value: rupees(transportTotal),  meta: `${t.rows[0].count} deliveries` },
+        { label: "Company Balance", value: rupees(netBalance),      meta: "opening + sales − costs" },
       ],
       recent,
     });
@@ -547,26 +592,51 @@ router.get("/inventory", requirePermission("reports", "view"), async (_req, res,
 router.get("/ledger", requirePermission("reports", "view"), async (_req, res, next) => {
   try {
     const { rows: cust } = await query(`
-      SELECT c.name,
-             COALESCE((SELECT SUM(s.total) FROM sales s
+      SELECT c.id, c.name,
+             COALESCE((SELECT SUM(s.total)
+                         FROM sales s
                         WHERE s.customer_id = c.id AND s.deleted_at IS NULL),0) AS billed,
-             COALESCE((SELECT SUM(CASE WHEN t.direction='in' THEN t.amount ELSE -t.amount END)
-                         FROM transactions t
-                        WHERE t.party_type='customer'
-                          AND t.party_key = c.id::text
-                          AND t.deleted_at IS NULL),0) AS paid
+             COALESCE((
+               SELECT SUM(CASE WHEN t.direction='in' THEN t.amount ELSE -t.amount END)
+                 FROM transactions t
+                WHERE t.party_type = 'customer'
+                  AND t.deleted_at IS NULL
+                  AND (
+                    t.party_key   = c.id::text
+                    OR t.party_key   = c.name
+                    OR t.party_label = c.name
+                    OR (t.ref_type = 'sale' AND t.ref_id IN (
+                      SELECT s2.id FROM sales s2
+                       WHERE s2.customer_id = c.id AND s2.deleted_at IS NULL
+                    ))
+                  )
+             ),0) AS paid
         FROM customers c
+       WHERE c.deleted_at IS NULL
     `);
+
     const { rows: sup } = await query(`
-      SELECT s.name,
-             COALESCE((SELECT SUM(p.total) FROM purchases p
+      SELECT s.id, s.name,
+             COALESCE((SELECT SUM(p.total)
+                         FROM purchases p
                         WHERE p.supplier_id = s.id AND p.deleted_at IS NULL),0) AS billed,
-             COALESCE((SELECT SUM(CASE WHEN t.direction='out' THEN t.amount ELSE -t.amount END)
-                         FROM transactions t
-                        WHERE t.party_type='supplier'
-                          AND t.party_key = s.name
-                          AND t.deleted_at IS NULL),0) AS paid
+             COALESCE((
+               SELECT SUM(CASE WHEN t.direction='out' THEN t.amount ELSE -t.amount END)
+                 FROM transactions t
+                WHERE t.party_type = 'supplier'
+                  AND t.deleted_at IS NULL
+                  AND (
+                    t.party_key   = s.id::text
+                    OR t.party_key   = s.name
+                    OR t.party_label = s.name
+                    OR (t.ref_type = 'purchase' AND t.ref_id IN (
+                      SELECT p2.id FROM purchases p2
+                       WHERE p2.supplier_id = s.id AND p2.deleted_at IS NULL
+                    ))
+                  )
+             ),0) AS paid
         FROM suppliers s
+       WHERE s.deleted_at IS NULL
     `);
 
     const customers = cust.map((r) => ({
@@ -598,7 +668,9 @@ router.get("/ledger", requirePermission("reports", "view"), async (_req, res, ne
   } catch (e) { next(e); }
 });
 
-/* 13. Company-wise Summary — FIXED: every column is table-qualified. */
+
+/* 13. Company-wise Summary — every column is table-qualified to avoid
+       ambiguity between the joined transportation + purchases tables. */
 router.get("/company-summary", requirePermission("reports", "view"), async (_req, res, next) => {
   try {
     const { rows } = await query(`
