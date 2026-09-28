@@ -32,15 +32,30 @@ export function AuthProvider({ children }) {
 
   const has = useCallback((module, action) => {
     if (!user) return false;
+    // SUPER_ADMIN bypasses every permission check.
+    if (user.role === "SUPER_ADMIN") return true;
     return user.permissions.includes(`${module}:${action}`);
   }, [user]);
+
   const hasRole = useCallback((...roles) => {
     if (!user) return false;
-    return user.role === "SUPER_ADMIN" || roles.includes(user.role);
+    if (user.role === "SUPER_ADMIN") return true;
+    return roles.includes(user.role);
   }, [user]);
 
+  /**
+   * Single source of truth for "can this user delete rows in <module>?".
+   * Only ADMIN and SUPER_ADMIN qualify — never USER or ACCOUNTANT — even
+   * if a team grant or role baseline accidentally includes `module:delete`.
+   */
+  const canDelete = useCallback((module) => {
+    if (!user) return false;
+    if (user.role !== "ADMIN" && user.role !== "SUPER_ADMIN") return false;
+    return has(module, "delete");
+  }, [user, has]);
+
   return (
-    <AuthContext.Provider value={{ user, loading, login, logout, refresh, has, hasRole }}>
+    <AuthContext.Provider value={{ user, loading, login, logout, refresh, has, hasRole, canDelete }}>
       {children}
     </AuthContext.Provider>
   );
