@@ -156,7 +156,7 @@ router.post("/", requirePermission("purchases", "create"), async (req, res, next
          RETURNING *`,
         [
           "purchase_payment", "supplier",
-          String(created.supplier_id),
+          supplierName,
           supplierName,
           "out", amount_paid, paidMethod,
           "purchase", created.id,
