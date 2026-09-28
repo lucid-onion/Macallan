@@ -65,11 +65,11 @@ const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) =>
 );
 
 export default function Purchases() {
-  const { has } = useAuth();
+  const { has, canDelete  } = useAuth();
   const canCreate = has("purchases", "create");
   const canUpdate = has("purchases", "update");
-  const canDelete = has("purchases", "delete");
-
+  const canDel    = canDelete("purchases");
+  
   const [rows, setRows] = useState([]);
   const [suppliers, setSuppliers] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -458,7 +458,20 @@ export default function Purchases() {
     { key: "dust_qty",  label: "Dust",  numeric: true, render: (r) => kg(r.dust_qty) },
     { key: "net_qty",   label: "Net",   numeric: true, render: (r) => kg(r.net_qty) },
     { key: "rate",      label: "Rate",  numeric: true, render: (r) => `${rupees(r.rate)}/kg` },
-    { key: "total",     label: "Total", numeric: true, render: (r) => rupees(r.total) },
+    { key: "total", label: "Total", numeric: true, render: (r) => rupees(r.total) },
+    { key: "paid_amount", label: "Paid", numeric: true,
+      render: (r) => (
+        <span className="text-positive">{rupees(r.paid_amount || 0)}</span>
+      ) },
+    { key: "due_amount", label: "Balance", numeric: true,
+      render: (r) => {
+        const due = r.due_amount || 0;
+        return (
+          <span className={due > 0 ? "text-negative" : "text-ink-faint"}>
+            {rupees(due)}
+          </span>
+        );
+      } },
     { key: "status", label: "Status",
       render: (r) => (
         <Badge variant={r.status === "Delivered" ? "positive" : "warning"}>{r.status}</Badge>
@@ -470,7 +483,7 @@ export default function Purchases() {
             onClick={(e) => { e.stopPropagation(); openEdit(r); }}
             className="text-steel text-xs hover:underline">Edit</button>
         )}
-        {canDelete && (
+        {canDel && (
           <button type="button"
             onClick={(e) => { e.stopPropagation(); setToDelete(r); }}
             className="text-negative text-xs hover:underline">Delete</button>
@@ -558,6 +571,8 @@ export default function Purchases() {
           }
         >
           <div className="grid grid-cols-2 gap-x-5 gap-y-2.5 mb-4 max-[560px]:grid-cols-1">
+            <DetailPair label="Paid So Far" value={<span className="text-positive">{rupees(detail.paid_amount || 0)}</span>}/>
+            <DetailPair label="Balance Due" value={<span className={(detail.due_amount || 0) > 0 ? "text-negative" : "text-ink-faint"}>{rupees(detail.due_amount || 0)}</span>}/>
             <DetailPair label="Supplier" value={supplierNameById.get(detail.supplier_id) || "—"} />
             <DetailPair label="Person Name" value={detail.contact_person || "—"} />
             <DetailPair label="Phone Number" value={detail.contact_phone || "—"} />
