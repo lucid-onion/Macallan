@@ -22,10 +22,10 @@ const EMPTY_FORM = {
 const num = (v) => { const n = Number(v); return isFinite(n) ? n : 0; };
 
 export default function OfficeExpenses() {
-  const { has } = useAuth();
+  const { has, canDelete } = useAuth();
   const canCreate = has("office_expenses", "create");
   const canUpdate = has("office_expenses", "update");
-  const canDelete = has("office_expenses", "delete");
+  const canDel    = canDelete("office_expenses");
 
   const [rows, setRows] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -204,7 +204,7 @@ export default function OfficeExpenses() {
           <button type="button" onClick={(e) => { e.stopPropagation(); openEdit(r); }}
             className="text-steel text-xs hover:underline">Edit</button>
         )}
-        {canDelete && (
+        {canDel && (
           <button type="button" onClick={(e) => { e.stopPropagation(); setToDelete(r); }}
             className="text-negative text-xs hover:underline">Delete</button>
         )}

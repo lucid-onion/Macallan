@@ -13,10 +13,10 @@ import DataTable from "../components/DataTable";
 const EMPTY_FORM = { name: "", category: "", stock_kg: 0, reorder_level: 0 };
 
 export default function Inventory() {
-  const { has } = useAuth();
+  const { has, canDelete } = useAuth();
   const canCreate = has("inventory", "create");
   const canUpdate = has("inventory", "update");
-  const canDelete = has("inventory", "delete");
+  const canDel    = canDelete("inventory");
 
   const [rows, setRows] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -142,7 +142,7 @@ export default function Inventory() {
             <button type="button" onClick={(e) => { e.stopPropagation(); openEdit(r); }}
               className="text-steel text-xs hover:underline">Edit</button>
           )}
-          {canDelete && (
+          {canDel && (
             <button type="button" onClick={(e) => { e.stopPropagation(); setToDelete(r); }}
               className="text-negative text-xs hover:underline">Delete</button>
           )}

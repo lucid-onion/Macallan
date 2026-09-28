@@ -46,9 +46,9 @@ const TRANSACTION_TYPES = [
 function num(v) { const n = Number(v); return isFinite(n) ? n : 0; }
 
 export default function Transactions() {
-  const { has } = useAuth();
-  const canCreate = has("transactions", "create");
-  const canDelete = has("transactions", "delete");
+  const { has, canDelete } = useAuth();
+const canCreate = has("transactions", "create");
+const canDel    = canDelete("transactions");
 
   const [rows, setRows] = useState([]);
   const [customers, setCustomers] = useState([]);
@@ -219,7 +219,7 @@ export default function Transactions() {
     { key: "actions", label: "",
       render: (r) => (
         <div className="flex justify-end">
-          {canDelete && (
+          {canDel && (
             <button type="button" onClick={(e) => { e.stopPropagation(); setToDelete(r); }}
               className="text-negative text-xs hover:underline">Delete</button>
           )}

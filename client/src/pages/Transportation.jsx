@@ -50,10 +50,10 @@ const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) =>
 );
 
 export default function Transportation() {
-  const { has } = useAuth();
+  const { has, canDelete } = useAuth();
   const canCreate = has("transportation", "create");
   const canUpdate = has("transportation", "update");
-  const canDelete = has("transportation", "delete");
+  const canDel    = canDelete("transportation");
 
   const [rows, setRows] = useState([]);
   const [sales, setSales] = useState([]);
@@ -405,7 +405,7 @@ export default function Transportation() {
           <button type="button" onClick={(e) => { e.stopPropagation(); openEdit(r); }}
             className="text-steel text-xs hover:underline">Edit</button>
         )}
-        {canDelete && (
+        {canDel && (
           <button type="button" onClick={(e) => { e.stopPropagation(); setToDelete(r); }}
             className="text-negative text-xs hover:underline">Delete</button>
         )}

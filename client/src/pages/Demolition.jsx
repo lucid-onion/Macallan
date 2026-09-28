@@ -24,10 +24,10 @@ const EMPTY_FORM = {
 const num = (v) => { const n = Number(v); return isFinite(n) ? n : 0; };
 
 export default function Demolition() {
-  const { has } = useAuth();
+  const { has, canDelete } = useAuth();
   const canCreate = has("demolition", "create");
   const canUpdate = has("demolition", "update");
-  const canDelete = has("demolition", "delete");
+  const canDel    = canDelete("demolition");
 
   const [rows, setRows] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -229,7 +229,7 @@ export default function Demolition() {
           <button type="button" onClick={(e) => { e.stopPropagation(); openEdit(r); }}
             className="text-steel text-xs hover:underline">Edit</button>
         )}
-        {canDelete && (
+        {canDel && (
           <button type="button" onClick={(e) => { e.stopPropagation(); setToDelete(r); }}
             className="text-negative text-xs hover:underline">Delete</button>
         )}
