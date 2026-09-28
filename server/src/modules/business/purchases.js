@@ -55,10 +55,27 @@ const schema = z.object({
 
 router.get("/", requirePermission("purchases", "view"), async (_req, res, next) => {
   try {
-    const { rows } = await query(
-      `SELECT * FROM purchases WHERE deleted_at IS NULL ORDER BY date_ad DESC, id DESC`
-    );
-    res.json({ items: rows });
+    const { rows } = await query(`
+      SELECT p.*,
+             COALESCE((
+               SELECT SUM(CASE WHEN t.direction='out' THEN t.amount ELSE -t.amount END)
+                 FROM transactions t
+                WHERE t.ref_type = 'purchase'
+                  AND t.ref_id   = p.id
+                  AND t.deleted_at IS NULL
+             ), 0) AS paid_amount
+        FROM purchases p
+       WHERE p.deleted_at IS NULL
+       ORDER BY p.date_ad DESC, p.id DESC
+    `);
+
+    const items = rows.map((r) => ({
+      ...r,
+      paid_amount: Number(r.paid_amount) || 0,
+      due_amount: Math.max(0, Number(r.total) - (Number(r.paid_amount) || 0)),
+    }));
+
+    res.json({ items });
   } catch (e) { next(e); }
 });
 
