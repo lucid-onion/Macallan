@@ -10,6 +10,17 @@
       href="https://fonts.googleapis.com/css2?family=Noto+Sans:wght@400;500;600;700&family=Noto+Sans+Devanagari:wght@400;500;600;700&display=swap"
       rel="stylesheet"
     />
+
+    <!-- Apply the saved theme before React renders, so there's no
+         flash of the wrong theme on a refresh. -->
+    <script>
+      try {
+        var t = localStorage.getItem("asn_theme");
+        if (t === "dark" || t === "light") {
+          document.documentElement.setAttribute("data-theme", t);
+        }
+      } catch (e) { /* localStorage unavailable — fall through to default */ }
+    </script>
   </head>
   <body>
     <div id="root"></div>
