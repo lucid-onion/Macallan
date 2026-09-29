@@ -1,3 +1,12 @@
+/* ==========================================================================
+   Settings.jsx — System Settings (SUPER_ADMIN only).
+     - Company Details   (name only)  — own Save
+     - Opening Balance   (number)     — own Save
+     - Company Logo      (uploader)
+     - Appearance        (light/dark)
+   Each card saves independently so a typo in one field can't overwrite the
+   other.
+   ========================================================================== */
 import { useEffect, useState } from "react";
 import { api } from "../api/client";
 
@@ -10,40 +19,52 @@ export default function Settings() {
     name: "",
     logo: "",
     openingBalance: 0,
-    theme: "light",
+    theme:
+    (typeof localStorage !== "undefined" && localStorage.getItem("asn_theme")) ||
+    "light",
   });
-  const [hint, setHint] = useState("");
-  const [saving, setSaving] = useState(false);
   const [loadError, setLoadError] = useState(null);
 
-  useEffect(() => {
-    api.get("/api/settings")
-      .then((r) => {
-        const c = r?.settings?.company || {};
-        setCompany((prev) => ({
-          ...prev,
-          name: c.name ?? prev.name,
-          logo: c.logo ?? prev.logo,
-          openingBalance: c.openingBalance ?? prev.openingBalance,
-          theme: c.theme ?? prev.theme,
-        }));
-        if (c.theme) document.documentElement.setAttribute("data-theme", c.theme);
-      })
-      .catch((e) => setLoadError(e.message || "Failed to load settings"));
-  }, []);
+  const [nameHint, setNameHint]     = useState("");
+  const [balanceHint, setBalanceHint] = useState("");
+  const [savingName, setSavingName] = useState(false);
+  const [savingBalance, setSavingBalance] = useState(false);
 
-  async function save(e) {
+  // Keep <html data-theme> and localStorage in lockstep with the state
+  // whenever the theme changes — from the toggle, or from a fresh mount.
+  useEffect(() => {
+    const t = company.theme === "dark" ? "dark" : "light";
+    document.documentElement.setAttribute("data-theme", t);
+    try { localStorage.setItem("asn_theme", t); } catch { /* private mode */ }
+  }, [company.theme]);
+
+  async function saveName(e) {
     e.preventDefault();
-    setSaving(true);
-    setHint("");
+    setSavingName(true); setNameHint("");
     try {
-      await api.patch("/api/settings", { company });
-      setHint("Saved.");
-      setTimeout(() => setHint(""), 2000);
+      await api.patch("/api/settings", { company: { name: company.name } });
+      setNameHint("Company name saved.");
+      setTimeout(() => setNameHint(""), 2200);
     } catch (e) {
-      setHint(e.message || "Could not save settings");
+      setNameHint(e.message || "Could not save name");
     } finally {
-      setSaving(false);
+      setSavingName(false);
+    }
+  }
+
+  async function saveBalance(e) {
+    e.preventDefault();
+    setSavingBalance(true); setBalanceHint("");
+    try {
+      await api.patch("/api/settings", {
+        company: { openingBalance: Number(company.openingBalance) || 0 },
+      });
+      setBalanceHint("Opening balance saved.");
+      setTimeout(() => setBalanceHint(""), 2200);
+    } catch (e) {
+      setBalanceHint(e.message || "Could not save balance");
+    } finally {
+      setSavingBalance(false);
     }
   }
 
@@ -61,10 +82,12 @@ export default function Settings() {
       )}
 
       <div className="grid grid-cols-2 gap-[18px] max-[760px]:grid-cols-1">
-        <form onSubmit={save} className="bg-surface border border-line rounded-md shadow-card px-5 py-[18px]">
-          <h3 className="text-[15px] font-semibold mb-1">Company</h3>
+
+        {/* ---- Company Details ---- */}
+        <form onSubmit={saveName} className="bg-surface border border-line rounded-md shadow-card px-5 py-[18px]">
+          <h3 className="text-[15px] font-semibold mb-1">Company Details</h3>
           <p className="text-[12.5px] text-ink-faint mb-4">
-            Shown in the sidebar, documents and reports.
+            Shown in the sidebar, invoices and reports across the app.
           </p>
 
           <label className="flex flex-col gap-1.5 mb-3.5">
@@ -73,8 +96,27 @@ export default function Settings() {
               value={company.name}
               onChange={(e) => setCompany((c) => ({ ...c, name: e.target.value }))}
               className={inputCls}
+              placeholder="e.g. ASN Demolition Pvt.Ltd"
             />
           </label>
+
+          <button
+            type="submit"
+            disabled={savingName}
+            className="inline-flex items-center rounded-sm bg-steel border border-steel text-white text-[13px] font-medium px-3.5 py-2 hover:bg-steel-dark transition-colors disabled:opacity-50"
+          >
+            {savingName ? "Saving…" : "Save Name"}
+          </button>
+          {nameHint && <div className="text-xs text-positive mt-2.5">{nameHint}</div>}
+        </form>
+
+        {/* ---- Opening Balance ---- */}
+        <form onSubmit={saveBalance} className="bg-surface border border-line rounded-md shadow-card px-5 py-[18px]">
+          <h3 className="text-[15px] font-semibold mb-1">Opening Balance</h3>
+          <p className="text-[12.5px] text-ink-faint mb-4">
+            The cash the business started with in this app. The Company Balance on
+            the Transactions page is this figure plus every transaction recorded since.
+          </p>
 
           <label className="flex flex-col gap-1.5 mb-3.5">
             <span className="text-[12.5px] font-medium text-ink-soft">Opening Balance (Rs)</span>
@@ -83,22 +125,24 @@ export default function Settings() {
               step="0.01"
               value={company.openingBalance}
               onChange={(e) =>
-                setCompany((c) => ({ ...c, openingBalance: Number(e.target.value) || 0 }))
+                setCompany((c) => ({ ...c, openingBalance: e.target.value }))
               }
               className={inputCls}
+              placeholder="0"
             />
           </label>
 
           <button
             type="submit"
-            disabled={saving}
+            disabled={savingBalance}
             className="inline-flex items-center rounded-sm bg-steel border border-steel text-white text-[13px] font-medium px-3.5 py-2 hover:bg-steel-dark transition-colors disabled:opacity-50"
           >
-            {saving ? "Saving…" : "Save"}
+            {savingBalance ? "Saving…" : "Save Balance"}
           </button>
-          {hint && <div className="text-xs text-positive mt-2.5">{hint}</div>}
+          {balanceHint && <div className="text-xs text-positive mt-2.5">{balanceHint}</div>}
         </form>
 
+        {/* ---- Appearance ---- */}
         <div className="bg-surface border border-line rounded-md shadow-card px-5 py-[18px]">
           <h3 className="text-[15px] font-semibold mb-1">Appearance</h3>
           <p className="text-[12.5px] text-ink-faint mb-4">Light or dark interface, saved per device.</p>
@@ -114,11 +158,13 @@ export default function Settings() {
                 const theme = e.target.checked ? "dark" : "light";
                 setCompany((c) => ({ ...c, theme }));
                 document.documentElement.setAttribute("data-theme", theme);
+                localStorage.setItem("asn_theme", theme);
               }}
               className="w-5 h-5"
             />
           </label>
         </div>
+
       </div>
     </>
   );
