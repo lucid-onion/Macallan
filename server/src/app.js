@@ -4,8 +4,7 @@ import helmet from "helmet";
 import cors from "cors";
 import rateLimit from "express-rate-limit";
 
-import { loadUser, requireAuth } from "./middleware/auth.js";
-import { requirePermission } from "./middleware/rbac.js";
+import { loadUser } from "./middleware/auth.js";
 import { errorHandler } from "./utils/errors.js";
 
 import authRoutes from "./modules/auth/routes.js";
