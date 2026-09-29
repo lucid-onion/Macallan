@@ -1,3 +1,8 @@
+/* ==========================================================================
+   OfficeExpenses.jsx — day-to-day expense slips.
+   Each slip holds N line items { description, amount }, added dynamically.
+   Click a row to view + print the A4 expense slip.
+   ========================================================================== */
 import { useEffect, useMemo, useState } from "react";
 import { api } from "../api/client";
 import { useAuth } from "../auth/AuthContext";
@@ -5,21 +10,26 @@ import {
   Button, Modal, Field, ConfirmDialog, PageHeader, inputCls,
 } from "../components/ui";
 import DataTable from "../components/DataTable";
+import { printVoucher } from "../lib/printVoucher";
 import { bsToday, bsToAdString, adToBs, formatBs } from "../lib/nepali-date";
 
 const todayBs = bsToday();
 
 const EMPTY_FORM = {
-  date_bs_year: todayBs.year,
+  date_bs_year:  todayBs.year,
   date_bs_month: todayBs.month,
-  date_bs_day: todayBs.day,
-  date_ad: bsToAdString(todayBs),
+  date_bs_day:   todayBs.day,
+  date_ad:       bsToAdString(todayBs),
   company: "ASN Demolition Pvt.Ltd",
   note: "",
   items: [{ description: "", amount: "" }],
 };
 
 const num = (v) => { const n = Number(v); return isFinite(n) ? n : 0; };
+const rupees = (v) => `Rs. ${num(v).toLocaleString("en-IN", { maximumFractionDigits: 2 })}`;
+const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) =>
+  ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c])
+);
 
 export default function OfficeExpenses() {
   const { has, canDelete } = useAuth();
@@ -37,6 +47,7 @@ export default function OfficeExpenses() {
   const [form, setForm] = useState(EMPTY_FORM);
   const [saving, setSaving] = useState(false);
   const [formError, setFormError] = useState(null);
+  const [detail, setDetail] = useState(null);
 
   const [toDelete, setToDelete] = useState(null);
   const [deleting, setDeleting] = useState(false);
@@ -68,10 +79,10 @@ export default function OfficeExpenses() {
     const itemCount = rows.reduce((s, r) => s + (r.items?.length || 0), 0);
     const avg = rows.length ? total / rows.length : 0;
     return [
-      { label: "Total Expenses", value: `Rs. ${total.toLocaleString("en-IN")}` },
+      { label: "Total Expenses", value: rupees(total) },
       { label: "Slips Logged",   value: String(rows.length) },
       { label: "Line Items",     value: String(itemCount) },
-      { label: "Average per Slip", value: `Rs. ${Math.round(avg).toLocaleString("en-IN")}` },
+      { label: "Average per Slip", value: rupees(Math.round(avg)) },
     ];
   }, [rows]);
 
@@ -187,6 +198,47 @@ export default function OfficeExpenses() {
     }
   }
 
+  /* ---------- Print ---------- */
+  function printOfficeExpense(row) {
+    const company = row.company || "ASN Demolition Pvt.Ltd";
+    const html = `
+      <div class="voucher-sheet">
+        <div class="voucher-head">
+          <div class="voucher-brand">${esc(company)}</div>
+          <div class="voucher-title">Office Expense Slip</div>
+        </div>
+        <div class="voucher-meta">
+          <div>Slip No.<strong>${esc(row.id)}</strong></div>
+          <div>Date<strong>${esc(formatBs(row))} (${esc(row.date_ad ? String(row.date_ad).slice(0, 10) : "-")})</strong></div>
+          <div>Company<strong>${esc(company)}</strong></div>
+        </div>
+        <table class="voucher-table">
+          <thead>
+            <tr><th>Description</th><th>Amount</th></tr>
+          </thead>
+          <tbody>
+            ${(row.items || []).map((i) => `
+              <tr>
+                <td>${esc(i.description)}</td>
+                <td>${esc(rupees(i.amount))}</td>
+              </tr>`).join("")}
+            <tr class="voucher-amount-row">
+              <td>Total</td>
+              <td>${esc(rupees(row.total))}</td>
+            </tr>
+          </tbody>
+        </table>
+        ${row.note ? `<p style="font-size:12.5px;color:#444;">Note: ${esc(row.note)}</p>` : ""}
+        <div class="voucher-signatures">
+          <div>Prepared By</div>
+          <div>Approved By</div>
+        </div>
+        <div class="voucher-foot">Printed from ${esc(company)} management system.</div>
+      </div>`;
+    printVoucher(html);
+  }
+  
+  /* ---------- Table columns ---------- */
   const columns = [
     { key: "date_bs", label: "Date (BS)", render: (r) => formatBs(r) },
     { key: "date_ad", label: "Date (EN)", render: (r) => r.date_ad ? String(r.date_ad).slice(0, 10) : "—" },
@@ -196,7 +248,7 @@ export default function OfficeExpenses() {
       return summary.length > 60 ? summary.slice(0, 57) + "…" : summary || "—";
     } },
     { key: "count", label: "Lines", numeric: true, render: (r) => (r.items || []).length },
-    { key: "total", label: "Total", numeric: true, render: (r) => `Rs. ${num(r.total).toLocaleString("en-IN")}` },
+    { key: "total", label: "Total", numeric: true, render: (r) => rupees(r.total) },
     { key: "note", label: "Note", render: (r) => r.note || "—" },
     { key: "actions", label: "", render: (r) => (
       <div className="flex gap-1.5 justify-end">
@@ -249,6 +301,7 @@ export default function OfficeExpenses() {
         <DataTable
           columns={columns}
           rows={filtered}
+          onRowClick={(row) => setDetail(row)}
           emptyMessage={
             rows.length === 0
               ? (canCreate ? 'No expenses yet — click "+ Add Expense" to get started.' : "No expenses yet.")
@@ -257,6 +310,62 @@ export default function OfficeExpenses() {
         />
       )}
 
+      {/* Detail modal — view + print */}
+      {detail && (
+        <Modal
+          title={`Office Expense — ${formatBs(detail)}`}
+          onClose={() => setDetail(null)}
+          wide
+          footer={
+            <>
+              <Button onClick={() => printOfficeExpense(detail)}>Print</Button>
+              <Button onClick={() => setDetail(null)}>Close</Button>
+            </>
+          }
+        >
+          <div className="grid grid-cols-2 gap-x-5 gap-y-2.5 mb-4 max-[560px]:grid-cols-1">
+            <DetailPair label="Company" value={detail.company || "—"} />
+            <DetailPair label="Date (EN)" value={detail.date_ad ? String(detail.date_ad).slice(0, 10) : "—"} />
+          </div>
+
+          <div className="overflow-x-auto border border-line rounded-md bg-surface mb-4">
+            <table className="w-full border-collapse min-w-[360px]">
+              <thead>
+                <tr>
+                  <th className="text-[11.5px] uppercase tracking-[0.04em] text-ink-faint font-semibold text-left px-4 py-[11px] border-b border-line whitespace-nowrap">
+                    Description
+                  </th>
+                  <th className="text-[11.5px] uppercase tracking-[0.04em] text-ink-faint font-semibold text-right px-4 py-[11px] border-b border-line whitespace-nowrap">
+                    Amount
+                  </th>
+                </tr>
+              </thead>
+              <tbody>
+                {(detail.items || []).map((it, i) => (
+                  <tr key={i} className="transition-colors hover:bg-surface-sunken">
+                    <td className="px-4 py-[11px] border-b border-line-soft text-[13.5px]">{it.description}</td>
+                    <td className="px-4 py-[11px] border-b border-line-soft text-[13.5px] text-right tabular-nums">
+                      {rupees(it.amount)}
+                    </td>
+                  </tr>
+                ))}
+                <tr>
+                  <td className="px-4 py-[11px] text-[13.5px] font-semibold border-t border-line">Total</td>
+                  <td className="px-4 py-[11px] text-[13.5px] font-semibold text-right tabular-nums border-t border-line">
+                    {rupees(detail.total)}
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+
+          <div className="grid grid-cols-2 gap-x-5 gap-y-2.5 max-[560px]:grid-cols-1">
+            <DetailPair label="Note" value={detail.note || "—"} />
+          </div>
+        </Modal>
+      )}
+
+      {/* Create / edit modal */}
       {showForm && (
         <Modal
           title={editing ? "Edit Office Expense" : "New Office Expense"}
@@ -296,7 +405,6 @@ export default function OfficeExpenses() {
                   onChange={(e) => {
                     const ad = e.target.value;
                     setForm((f) => ({ ...f, date_ad: ad }));
-                    // Sync BS from AD
                     try {
                       const d = new Date(ad);
                       if (!isNaN(d)) {
@@ -333,7 +441,7 @@ export default function OfficeExpenses() {
             <div className="flex items-center justify-between gap-2 mb-4">
               <Button onClick={addItem} size="sm">+ Add Row</Button>
               <div className="text-[13.5px] font-semibold">
-                Total: <span className="text-steel-dark">Rs. {computedTotal.toLocaleString("en-IN")}</span>
+                Total: <span className="text-steel-dark">{rupees(computedTotal)}</span>
               </div>
             </div>
 
@@ -356,5 +464,14 @@ export default function OfficeExpenses() {
         />
       )}
     </>
+  );
+}
+
+function DetailPair({ label, value }) {
+  return (
+    <div>
+      <div className="text-[11.5px] text-ink-faint mb-0.5">{label}</div>
+      <div className="text-[13.5px] font-medium">{value}</div>
+    </div>
   );
 }
