@@ -1,3 +1,9 @@
+/* ==========================================================================
+   Demolition.jsx — demolition job slips.
+   Each job has: date, company, site, transport_fee, and N line items
+   { description, quantity, rate, amount } where amount = quantity × rate.
+   Click a row to view + print the A4 job slip.
+   ========================================================================== */
 import { useEffect, useMemo, useState } from "react";
 import { api } from "../api/client";
 import { useAuth } from "../auth/AuthContext";
@@ -5,15 +11,16 @@ import {
   Button, Modal, Field, ConfirmDialog, PageHeader, inputCls,
 } from "../components/ui";
 import DataTable from "../components/DataTable";
+import { printVoucher } from "../lib/printVoucher";
 import { bsToday, bsToAdString, adToBs, formatBs } from "../lib/nepali-date";
 
 const todayBs = bsToday();
 
 const EMPTY_FORM = {
-  date_bs_year: todayBs.year,
+  date_bs_year:  todayBs.year,
   date_bs_month: todayBs.month,
-  date_bs_day: todayBs.day,
-  date_ad: bsToAdString(todayBs),
+  date_bs_day:   todayBs.day,
+  date_ad:       bsToAdString(todayBs),
   company: "ASN Demolition Pvt.Ltd",
   site: "",
   transport_fee: "0",
@@ -22,6 +29,10 @@ const EMPTY_FORM = {
 };
 
 const num = (v) => { const n = Number(v); return isFinite(n) ? n : 0; };
+const rupees = (v) => `Rs. ${num(v).toLocaleString("en-IN", { maximumFractionDigits: 2 })}`;
+const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) =>
+  ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c])
+);
 
 export default function Demolition() {
   const { has, canDelete } = useAuth();
@@ -39,6 +50,8 @@ export default function Demolition() {
   const [form, setForm] = useState(EMPTY_FORM);
   const [saving, setSaving] = useState(false);
   const [formError, setFormError] = useState(null);
+
+  const [detail, setDetail] = useState(null);
 
   const [toDelete, setToDelete] = useState(null);
   const [deleting, setDeleting] = useState(false);
@@ -70,10 +83,10 @@ export default function Demolition() {
     const transport = rows.reduce((s, r) => s + num(r.transport_fee), 0);
     const avg = rows.length ? total / rows.length : 0;
     return [
-      { label: "Total",        value: `Rs. ${total.toLocaleString("en-IN")}` },
-      { label: "Jobs Logged",  value: String(rows.length) },
-      { label: "Transport Cost", value: `Rs. ${transport.toLocaleString("en-IN")}` },
-      { label: "Average per Job", value: `Rs. ${Math.round(avg).toLocaleString("en-IN")}` },
+      { label: "Total",           value: rupees(total) },
+      { label: "Jobs Logged",     value: String(rows.length) },
+      { label: "Transport Cost",  value: rupees(transport) },
+      { label: "Average per Job", value: rupees(Math.round(avg)) },
     ];
   }, [rows]);
 
@@ -210,6 +223,59 @@ export default function Demolition() {
     }
   }
 
+  /* ---------- Print ---------- */
+  function printDemolitionVoucher(row) {
+    const company = row.company || "ASN Demolition Pvt.Ltd";
+    const html = `
+      <div class="voucher-sheet">
+        <div class="voucher-head">
+          <div class="voucher-brand">${esc(company)}</div>
+          <div class="voucher-title">Demolition Job Slip</div>
+        </div>
+        <div class="voucher-meta">
+          <div>Slip No.<strong>${esc(row.id)}</strong></div>
+          <div>Date<strong>${esc(formatBs(row))} (${esc(row.date_ad ? String(row.date_ad).slice(0, 10) : "-")})</strong></div>
+          <div>Company<strong>${esc(company)}</strong></div>
+        </div>
+        ${row.site ? `<p class="voucher-site">Site: ${esc(row.site)}</p>` : ""}
+        <table class="voucher-table">
+          <thead>
+            <tr>
+              <th>Description</th>
+              <th>Quantity</th>
+              <th>Rate</th>
+              <th>Amount</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${(row.items || []).map((i) => `
+              <tr>
+                <td>${esc(i.description)}</td>
+                <td>${esc(i.quantity)}</td>
+                <td>${esc(rupees(i.rate))}</td>
+                <td>${esc(rupees(i.amount))}</td>
+              </tr>`).join("")}
+            <tr>
+              <td colspan="3">Transport Fee</td>
+              <td>${esc(rupees(row.transport_fee || 0))}</td>
+            </tr>
+            <tr class="voucher-amount-row">
+              <td colspan="3">Total</td>
+              <td>${esc(rupees(row.total))}</td>
+            </tr>
+          </tbody>
+        </table>
+        ${row.note ? `<p style="font-size:12.5px;color:#444;">Note: ${esc(row.note)}</p>` : ""}
+        <div class="voucher-signatures">
+          <div>Prepared By</div>
+          <div>Approved By</div>
+        </div>
+        <div class="voucher-foot">Printed from ${esc(company)} management system.</div>
+      </div>`;
+    printVoucher(html);
+  }
+
+  /* ---------- Table columns ---------- */
   const columns = [
     { key: "date_bs", label: "Date (BS)", render: (r) => formatBs(r) },
     { key: "date_ad", label: "Date (EN)", render: (r) => r.date_ad ? String(r.date_ad).slice(0, 10) : "—" },
@@ -220,9 +286,9 @@ export default function Demolition() {
       return summary.length > 60 ? summary.slice(0, 57) + "…" : summary || "—";
     } },
     { key: "transport_fee", label: "Transport", numeric: true,
-      render: (r) => `Rs. ${num(r.transport_fee).toLocaleString("en-IN")}` },
+      render: (r) => rupees(r.transport_fee) },
     { key: "total", label: "Total", numeric: true,
-      render: (r) => `Rs. ${num(r.total).toLocaleString("en-IN")}` },
+      render: (r) => rupees(r.total) },
     { key: "actions", label: "", render: (r) => (
       <div className="flex gap-1.5 justify-end">
         {canUpdate && (
@@ -274,6 +340,7 @@ export default function Demolition() {
         <DataTable
           columns={columns}
           rows={filtered}
+          onRowClick={(row) => setDetail(row)}
           emptyMessage={
             rows.length === 0
               ? (canCreate ? 'No demolition jobs yet — click "+ Add Demolition" to get started.' : "No jobs yet.")
@@ -282,6 +349,103 @@ export default function Demolition() {
         />
       )}
 
+      {/* Detail modal — view + print */}
+      {detail && (
+        <Modal
+          title={`Demolition Job — ${formatBs(detail)}`}
+          onClose={() => setDetail(null)}
+          wide
+          footer={
+            <>
+              <Button onClick={() => printDemolitionVoucher(detail)}>Print</Button>
+              <Button onClick={() => setDetail(null)}>Close</Button>
+            </>
+          }
+        >
+          <div className="grid grid-cols-2 gap-x-5 gap-y-2.5 mb-4 max-[560px]:grid-cols-1">
+            <DetailPair label="Company" value={detail.company || "—"} />
+            <DetailPair label="Date (EN)" value={detail.date_ad ? String(detail.date_ad).slice(0, 10) : "—"} />
+            <DetailPair label="Site / Address" value={detail.site || "—"} span={2} />
+          </div>
+
+          <div className="overflow-x-auto border border-line rounded-md bg-surface mb-4">
+            <table className="w-full border-collapse table-fixed">
+              <thead>
+                <tr>
+                  <th className="text-[11.5px] uppercase tracking-[0.04em] text-ink-faint font-semibold text-left px-3 py-[11px] border-b border-line">
+                    Description
+                  </th>
+                  <th className="text-[11.5px] uppercase tracking-[0.04em] text-ink-faint font-semibold text-right px-3 py-[11px] border-b border-line w-20">
+                    Qty
+                  </th>
+                  <th className="text-[11.5px] uppercase tracking-[0.04em] text-ink-faint font-semibold text-right px-3 py-[11px] border-b border-line w-24">
+                    Rate
+                  </th>
+                  <th className="text-[11.5px] uppercase tracking-[0.04em] text-ink-faint font-semibold text-right px-3 py-[11px] border-b border-line w-28">
+                    Amount
+                  </th>
+                </tr>
+              </thead>
+              <tbody>
+                {(detail.items || []).length === 0 ? (
+                  <tr>
+                    <td colSpan={4} className="text-center text-ink-faint py-6 text-[13px]">
+                      No expense rows on this job.
+                    </td>
+                  </tr>
+                ) : (
+                  detail.items.map((it, i) => (
+                    <tr key={i} className="transition-colors hover:bg-surface-sunken">
+                      <td className="px-3 py-[11px] border-b border-line-soft text-[13.5px]">
+                        {it.description}
+                      </td>
+                      <td className="px-3 py-[11px] border-b border-line-soft text-[13.5px] text-right tabular-nums">
+                        {it.quantity}
+                      </td>
+                      <td className="px-3 py-[11px] border-b border-line-soft text-[13.5px] text-right tabular-nums">
+                        {rupees(it.rate)}
+                      </td>
+                      <td className="px-3 py-[11px] border-b border-line-soft text-[13.5px] text-right tabular-nums">
+                        {rupees(it.amount)}
+                      </td>
+                    </tr>
+                  ))
+                )}
+                <tr>
+                  <td colSpan={3} className="px-3 py-[11px] border-t border-line text-[13.5px] font-semibold">
+                    Expense Total
+                  </td>
+                  <td className="px-3 py-[11px] border-t border-line text-[13.5px] font-semibold text-right tabular-nums">
+                    {rupees(detail.expense_total)}
+                  </td>
+                </tr>
+                <tr>
+                  <td colSpan={3} className="px-3 py-[11px] border-t border-line-soft text-[13.5px]">
+                    Transport Fee
+                  </td>
+                  <td className="px-3 py-[11px] border-t border-line-soft text-[13.5px] text-right tabular-nums">
+                    {rupees(detail.transport_fee || 0)}
+                  </td>
+                </tr>
+                <tr>
+                  <td colSpan={3} className="px-3 py-[11px] border-t border-line text-[13.5px] font-semibold">
+                    Total
+                  </td>
+                  <td className="px-3 py-[11px] border-t border-line text-[15px] font-bold text-right tabular-nums">
+                    {rupees(detail.total)}
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+
+          <div className="grid grid-cols-2 gap-x-5 gap-y-2.5 max-[560px]:grid-cols-1">
+            <DetailPair label="Note" value={detail.note || "—"} span={2} />
+          </div>
+        </Modal>
+      )}
+
+      {/* Create / edit modal */}
       {showForm && (
         <Modal
           title={editing ? "Edit Demolition Job" : "New Demolition Job"}
@@ -377,11 +541,11 @@ export default function Demolition() {
             <div className="flex items-center justify-between gap-2 mb-4 flex-wrap">
               <Button onClick={addItem} size="sm">+ Add Row</Button>
               <div className="text-[13.5px]">
-                Expense total: <strong>Rs. {computed.expenseTotal.toLocaleString("en-IN")}</strong>
+                Expense total: <strong>{rupees(computed.expenseTotal)}</strong>
                 {" · "}
-                Transport: <strong>Rs. {computed.transportFee.toLocaleString("en-IN")}</strong>
+                Transport: <strong>{rupees(computed.transportFee)}</strong>
                 {" · "}
-                <span className="text-steel-dark">Grand total: Rs. {computed.grandTotal.toLocaleString("en-IN")}</span>
+                <span className="text-steel-dark">Grand total: {rupees(computed.grandTotal)}</span>
               </div>
             </div>
 
@@ -403,5 +567,14 @@ export default function Demolition() {
         />
       )}
     </>
+  );
+}
+
+function DetailPair({ label, value, span }) {
+  return (
+    <div className={span === 2 ? "col-span-2 max-[560px]:col-span-1" : ""}>
+      <div className="text-[11.5px] text-ink-faint mb-0.5">{label}</div>
+      <div className="text-[13.5px] font-medium">{value}</div>
+    </div>
   );
 }
