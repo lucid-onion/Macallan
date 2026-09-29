@@ -237,7 +237,7 @@ export default function OfficeExpenses() {
       </div>`;
     printVoucher(html);
   }
-  
+
   /* ---------- Table columns ---------- */
   const columns = [
     { key: "date_bs", label: "Date (BS)", render: (r) => formatBs(r) },
@@ -329,29 +329,41 @@ export default function OfficeExpenses() {
           </div>
 
           <div className="overflow-x-auto border border-line rounded-md bg-surface mb-4">
-            <table className="w-full border-collapse min-w-[360px]">
+            <table className="w-full border-collapse table-fixed">
               <thead>
                 <tr>
-                  <th className="text-[11.5px] uppercase tracking-[0.04em] text-ink-faint font-semibold text-left px-4 py-[11px] border-b border-line whitespace-nowrap">
+                  <th className="text-[11.5px] uppercase tracking-[0.04em] text-ink-faint font-semibold text-left px-4 py-[11px] border-b border-line">
                     Description
                   </th>
-                  <th className="text-[11.5px] uppercase tracking-[0.04em] text-ink-faint font-semibold text-right px-4 py-[11px] border-b border-line whitespace-nowrap">
+                  <th className="text-[11.5px] uppercase tracking-[0.04em] text-ink-faint font-semibold text-right px-4 py-[11px] border-b border-line w-40">
                     Amount
                   </th>
                 </tr>
               </thead>
               <tbody>
-                {(detail.items || []).map((it, i) => (
-                  <tr key={i} className="transition-colors hover:bg-surface-sunken">
-                    <td className="px-4 py-[11px] border-b border-line-soft text-[13.5px]">{it.description}</td>
-                    <td className="px-4 py-[11px] border-b border-line-soft text-[13.5px] text-right tabular-nums">
-                      {rupees(it.amount)}
+                {(detail.items || []).length === 0 ? (
+                  <tr>
+                    <td colSpan={2} className="text-center text-ink-faint py-6 text-[13px]">
+                      No line items on this slip.
                     </td>
                   </tr>
-                ))}
+                ) : (
+                  detail.items.map((it, i) => (
+                    <tr key={i} className="transition-colors hover:bg-surface-sunken">
+                      <td className="px-4 py-[11px] border-b border-line-soft text-[13.5px]">
+                        {it.description}
+                      </td>
+                      <td className="px-4 py-[11px] border-b border-line-soft text-[13.5px] text-right tabular-nums">
+                        {rupees(it.amount)}
+                      </td>
+                    </tr>
+                  ))
+                )}
                 <tr>
-                  <td className="px-4 py-[11px] text-[13.5px] font-semibold border-t border-line">Total</td>
-                  <td className="px-4 py-[11px] text-[13.5px] font-semibold text-right tabular-nums border-t border-line">
+                  <td className="px-4 py-[11px] border-t border-line text-[13.5px] font-semibold">
+                    Total
+                  </td>
+                  <td className="px-4 py-[11px] border-t border-line text-[13.5px] font-semibold text-right tabular-nums">
                     {rupees(detail.total)}
                   </td>
                 </tr>
