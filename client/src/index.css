@@ -1,11 +1,15 @@
 /* ==========================================================================
-   index.css — the single Tailwind entry for the React app.
+   index.css — the single stylesheet for the React app.
    Loaded once from src/main.jsx. Contains:
      1. Tailwind directives
      2. Design tokens (CSS variables; consumed by tailwind.config.js)
-     3. Base element resets that can't be expressed as utilities
-     4. .nav-link.active compatibility rule (used by React Router NavLink)
-     5. Print rules for vouchers + A4 documents
+     3. Base resets that can't be expressed as utilities
+     4. Nav-link active state (used by React Router NavLink)
+     5. Print system:
+        - .voucher-sheet  (single-record slips: Office Expense, Demolition)
+        - .doc-sheet      (A4 invoices: Purchase, Sale)
+        - .report-card    (Reports page)
+     6. Rule toggling body.printing-voucher during a print job
    ========================================================================== */
 
 @tailwind base;
@@ -14,8 +18,7 @@
 
 /* --------------------------------------------------------------------------
    1. Design tokens
-   Light theme is the default. Dark theme is toggled by setting
-   data-theme="dark" on <html>, matching the pattern in the rest of the app.
+   Light theme is default. Dark theme is toggled by data-theme="dark" on <html>.
    -------------------------------------------------------------------------- */
 :root {
   /* Neutrals */
@@ -69,9 +72,6 @@ html[data-theme="dark"] {
 
 /* --------------------------------------------------------------------------
    2. Base resets
-   Tailwind's preflight handles most of this, but a few things must stay
-   because they touch the document root, are set globally, or apply to
-   elements the app renders dynamically (e.g. from innerHTML templates).
    -------------------------------------------------------------------------- */
 * { box-sizing: border-box; }
 
@@ -91,15 +91,11 @@ body {
   -moz-osx-font-smoothing: grayscale;
 }
 
-a {
-  color: inherit;
-  text-decoration: none;
-}
+html[data-theme="dark"] body { background: var(--surface-sunken); }
 
-button {
-  font-family: inherit;
-  cursor: pointer;
-}
+a { color: inherit; text-decoration: none; }
+
+button { font-family: inherit; cursor: pointer; }
 
 h1, h2, h3, h4 {
   margin: 0;
@@ -112,131 +108,339 @@ h1, h2, h3, h4 {
   outline-offset: 2px;
 }
 
-/* Devanagari numeric helper — matches the `.np` class used by date cells. */
-.np {
-  font-family: var(--font-np);
-}
+/* Devanagari numeric helper */
+.np { font-family: var(--font-np); }
 
 /* --------------------------------------------------------------------------
    3. React Router NavLink active state
-   NavLink applies className via a callback that returns either a plain
-   string or a template with conditionals. Rather than rebuilding the whole
-   class list every time, we toggle `.nav-link.active` — one tiny rule, one
-   truthy class.
    -------------------------------------------------------------------------- */
 .nav-link.active {
   background: var(--steel-dark);
   color: #ffffff;
 }
-
-/* Sidebar nav hover state (mirrors the original .sidebar-nav a:hover) */
 .nav-link:hover {
   background: var(--sidebar-bg-raised);
   color: #ffffff;
 }
 
-/* --------------------------------------------------------------------------
-   4. Print — voucher + A4 document system
-   -------------------------------------------------------------------------- */
 /* ==========================================================================
-   Single-record voucher print — Purchase/Sale invoice.
-   Hidden on screen. Revealed only while body.printing-voucher is set.
+   4. PRINT — VOUCHER SHEET (single-record slips)
+   --------------------------------------------------------------------------
+   Used by:
+     - Office Expense slips (printOfficeExpense in OfficeExpenses.jsx)
+     - Demolition job slips (printDemolitionVoucher in Demolition.jsx)
+
+   Layout: letterhead (brand + title), meta strip (Slip No. / Date / Company),
+   an optional "Site" line, a bordered table, signature lines, footer.
+
+   Always present in the DOM as `.voucher-sheet` inside #print-voucher.
+   Hidden on screen by #print-voucher { display:none } below; revealed during
+   print by body.printing-voucher.
    ========================================================================== */
+
 #print-voucher { display: none; }
 
-#print-voucher .doc-sheet {
-  width: 100%; max-width: 190mm; margin: 0 auto;
-  color: #111; font-size: 10.5px; line-height: 1.3;
-}
-#print-voucher .doc-sheet * { box-sizing: border-box; }
-
-#print-voucher .doc-letterhead {
-  display: flex; justify-content: space-between; align-items: center;
-  gap: 16px; border-bottom: 2px solid #111; padding-bottom: 7px; margin-bottom: 8px;
-}
-#print-voucher .doc-brand { display: flex; align-items: center; gap: 12px; }
-#print-voucher .doc-company { font-size: 16px; font-weight: 700; line-height: 1.2; }
-#print-voucher .doc-kind { text-align: right; }
-#print-voucher .doc-title { font-size: 13px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.08em; }
-#print-voucher .doc-no { font-size: 10.5px; color: #444; margin-top: 2px; }
-
-#print-voucher .doc-meta {
-  display: grid; grid-template-columns: repeat(4, 1fr);
-  border: 1px solid #999; margin-bottom: 8px;
-}
-#print-voucher .doc-meta > div {
-  padding: 4px 8px; border-right: 1px solid #999;
-  font-size: 9.5px; color: #555; text-transform: uppercase; letter-spacing: 0.04em;
-}
-#print-voucher .doc-meta > div:last-child { border-right: none; }
-#print-voucher .doc-meta strong {
-  display: block; margin-top: 1px; font-size: 11px; color: #111;
-  text-transform: none; letter-spacing: 0;
+.voucher-sheet {
+  max-width: 640px;
+  margin: 0 auto;
+  padding: 28px;
+  font-family: var(--font-ui);
+  color: #111;
+  font-size: 13px;
+  line-height: 1.4;
 }
 
-#print-voucher .doc-section-title {
-  margin: 9px 0 4px; font-size: 9.5px; font-weight: 700;
-  text-transform: uppercase; letter-spacing: 0.07em; color: #444;
+.voucher-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-end;
+  border-bottom: 2px solid #111;
+  padding-bottom: 12px;
+  margin-bottom: 18px;
 }
 
-#print-voucher .doc-two-col { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
-#print-voucher .doc-box { border: 1px solid #999; padding: 6px 8px; }
-#print-voucher .doc-box-title { font-size: 9.5px; text-transform: uppercase; letter-spacing: 0.06em; color: #555; }
-#print-voucher .doc-box-main { font-size: 12.5px; font-weight: 600; margin-top: 2px; }
+.voucher-brand { font-size: 19px; font-weight: 700; }
 
-#print-voucher .doc-table { width: 100%; border-collapse: collapse; }
-#print-voucher .doc-table th,
-#print-voucher .doc-table td {
-  border: 1px solid #999; padding: 4px 7px; font-size: 10.5px;
-  text-align: left; color: #111;
-}
-#print-voucher .doc-table thead th {
-  background: #f0f0f0; font-size: 9.5px; font-weight: 700;
-  text-transform: uppercase; letter-spacing: 0.04em;
-}
-#print-voucher .doc-table .num { text-align: right; font-variant-numeric: tabular-nums; }
-
-#print-voucher .doc-summary { width: 66mm; margin: 7px 0 0 auto; border: 1px solid #999; }
-#print-voucher .doc-summary > div {
-  display: flex; justify-content: space-between; gap: 12px;
-  padding: 3px 9px; border-bottom: 1px solid #ccc; font-size: 10.5px;
-}
-#print-voucher .doc-summary > div:last-child { border-bottom: none; }
-#print-voucher .doc-summary .doc-summary-strong {
-  font-size: 12px; font-weight: 700; background: #f0f0f0;
+.voucher-title {
+  font-size: 13px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: #444;
 }
 
-#print-voucher .doc-signatures {
-  display: flex; justify-content: space-between; margin-top: 26px; font-size: 10.5px;
+.voucher-meta {
+  display: flex;
+  gap: 40px;
+  font-size: 12.5px;
+  margin-bottom: 18px;
+  color: #333;
 }
-#print-voucher .doc-signatures > div {
-  width: 44%; border-top: 1px solid #333; padding-top: 4px; text-align: center;
-}
-#print-voucher .doc-foot {
-  margin-top: 10px; font-size: 9.5px; color: #666; text-align: center;
+.voucher-meta > div { display: flex; flex-direction: column; gap: 2px; }
+.voucher-meta strong {
+  display: block;
+  font-size: 14px;
+  color: #111;
+  font-weight: 600;
 }
 
+/* The "Site: Balkot" line — one plain sentence, small. */
+.voucher-site {
+  font-size: 12.5px;
+  color: #333;
+  margin: -8px 0 14px;
+}
+
+.voucher-table {
+  width: 100%;
+  border-collapse: collapse;
+  margin-bottom: 26px;
+}
+
+.voucher-table th,
+.voucher-table td {
+  border: 1px solid #999;
+  padding: 9px 12px;
+  font-size: 13px;
+  text-align: left;
+  vertical-align: top;
+}
+
+.voucher-table thead th {
+  background: #f0f0f0;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  font-size: 11.5px;
+  font-weight: 700;
+}
+
+/* Numeric columns: right-aligned by default when the cell is not the first. */
+.voucher-table td:not(:first-child),
+.voucher-table th:not(:first-child) { text-align: right; }
+
+.voucher-table tr.voucher-amount-row td {
+  font-size: 15px;
+  font-weight: 700;
+  background: #f7f7f7;
+}
+
+.voucher-signatures {
+  display: flex;
+  justify-content: space-between;
+  margin-top: 50px;
+  font-size: 12.5px;
+}
+.voucher-signatures > div {
+  width: 45%;
+  border-top: 1px solid #333;
+  padding-top: 6px;
+  text-align: center;
+}
+
+.voucher-foot {
+  margin-top: 24px;
+  font-size: 11px;
+  color: #666;
+  text-align: center;
+}
+
+/* ==========================================================================
+   5. PRINT — DOCUMENT SHEET (A4 invoices)
+   --------------------------------------------------------------------------
+   Used by:
+     - Purchase Invoice (printPurchaseInvoice in Purchases.jsx)
+     - Sales Invoice    (printSaleInvoice    in Sales.jsx)
+     - Transportation Voucher (printTransportDocument in Transportation.jsx)
+
+   Wider than the voucher: uses label/value grids, two-column party boxes,
+   an item table, a summary block, and signature lines. Styled to fit one A4
+   sheet with the standard 10mm/8mm margins.
+   ========================================================================== */
+
+.doc-sheet {
+  width: 100%;
+  max-width: 190mm;
+  margin: 0 auto;
+  color: #111;
+  font-size: 10.5px;
+  line-height: 1.3;
+}
+.doc-sheet * { box-sizing: border-box; }
+
+.doc-letterhead {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 16px;
+  border-bottom: 2px solid #111;
+  padding-bottom: 7px;
+  margin-bottom: 8px;
+}
+.doc-brand { display: flex; align-items: center; gap: 12px; min-width: 0; }
+.doc-logo { width: 40px; height: 40px; object-fit: contain; flex-shrink: 0; }
+.doc-company { font-size: 16px; font-weight: 700; line-height: 1.2; }
+.doc-kind { text-align: right; flex-shrink: 0; }
+.doc-title { font-size: 13px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.08em; }
+.doc-no { font-size: 10.5px; color: #444; margin-top: 2px; }
+
+.doc-meta {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  border: 1px solid #999;
+  margin-bottom: 8px;
+}
+.doc-meta > div {
+  padding: 4px 8px;
+  border-right: 1px solid #999;
+  font-size: 9.5px;
+  color: #555;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.doc-meta > div:last-child { border-right: none; }
+.doc-meta strong {
+  display: block;
+  margin-top: 1px;
+  font-size: 11px;
+  color: #111;
+  text-transform: none;
+  letter-spacing: 0;
+}
+
+.doc-section-title {
+  margin: 9px 0 4px;
+  font-size: 9.5px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  color: #444;
+}
+
+.doc-two-col { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.doc-box { border: 1px solid #999; padding: 6px 8px; }
+.doc-box-title { font-size: 9.5px; text-transform: uppercase; letter-spacing: 0.06em; color: #555; }
+.doc-box-main { font-size: 12.5px; font-weight: 600; margin-top: 2px; }
+.doc-box-sub { font-size: 10.5px; color: #444; margin-top: 1px; }
+
+.doc-fields {
+  display: grid;
+  border-top: 1px solid #999;
+  border-left: 1px solid #999;
+}
+.doc-fields-2 { grid-template-columns: repeat(2, 1fr); }
+.doc-fields-3 { grid-template-columns: repeat(3, 1fr); }
+.doc-fields-4 { grid-template-columns: repeat(4, 1fr); }
+.doc-fields > div {
+  padding: 4px 7px;
+  border-right: 1px solid #999;
+  border-bottom: 1px solid #999;
+}
+.doc-fields span { display: block; font-size: 9.5px; color: #555; }
+.doc-fields strong {
+  display: block;
+  font-size: 11px;
+  font-weight: 600;
+  margin-top: 1px;
+  overflow-wrap: anywhere;
+}
+
+.doc-table { width: 100%; min-width: 0; border-collapse: collapse; }
+.doc-table th,
+.doc-table td {
+  border: 1px solid #999;
+  padding: 4px 7px;
+  font-size: 10.5px;
+  text-align: left;
+  color: #111;
+  white-space: normal;
+  text-transform: none;
+  letter-spacing: 0;
+}
+.doc-table thead th {
+  background: #f0f0f0;
+  font-size: 9.5px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.doc-table .num { text-align: right; font-variant-numeric: tabular-nums; }
+.doc-note { margin-top: 3px; font-size: 9.5px; color: #555; }
+
+.doc-summary {
+  width: 66mm;
+  margin: 7px 0 0 auto;
+  border: 1px solid #999;
+}
+.doc-summary > div {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 3px 9px;
+  border-bottom: 1px solid #ccc;
+  font-size: 10.5px;
+}
+.doc-summary > div:last-child { border-bottom: none; }
+.doc-summary .doc-summary-strong {
+  font-size: 12px;
+  font-weight: 700;
+  background: #f0f0f0;
+}
+
+.doc-signatures {
+  display: flex;
+  justify-content: space-between;
+  margin-top: 26px;
+  font-size: 10.5px;
+}
+.doc-signatures > div {
+  width: 44%;
+  border-top: 1px solid #333;
+  padding-top: 4px;
+  text-align: center;
+}
+.doc-foot {
+  margin-top: 10px;
+  font-size: 9.5px;
+  color: #666;
+  text-align: center;
+}
+
+/* ==========================================================================
+   6. PRINT — REPORT CARD (Reports page)
+   --------------------------------------------------------------------------
+   Used by Reports.jsx. Revealed by the print rules at the bottom of this file
+   (the report is not hidden by body.printing-voucher — it uses visibility).
+   ========================================================================== */
+
+.print-only { display: none; }
+
+/* (Component styles for the report card live in Tailwind classes; these
+   print rules only affect the layout when printing the Reports page.) */
+
+/* ==========================================================================
+   7. @media print — the two print modes
+   --------------------------------------------------------------------------
+   Two distinct print jobs share this block:
+
+   A) Voucher/Document printing (body.printing-voucher is set)
+      → hide everything except #print-voucher; show the voucher or doc sheet.
+
+   B) Report printing (body.printing-voucher is NOT set, but .report-card
+      exists on screen)
+      → hide the app chrome, show only the report and its print-only header.
+   ========================================================================== */
 @media print {
-  /* ---- 1. Hide everything except the voucher (voucher-print mode) ---- */
-  body.printing-voucher #root,
-  body.printing-voucher .sidebar,
-  body.printing-voucher .sidebar-overlay,
-  body.printing-voucher .topbar,
-  body.printing-voucher nav,
-  body.printing-voucher aside,
-  body.printing-voucher footer,
-  body.printing-voucher .no-print,
-  body.printing-voucher .print-hidden {
-    display: none !important;
-  }
-
+  /* ---------- Mode A: voucher / document ---------- */
+  body.printing-voucher > *:not(#print-voucher) { display: none !important; }
   body.printing-voucher #print-voucher {
     display: block !important;
     background: #fff !important;
     color: #111 !important;
   }
+  body.printing-voucher { background: #fff !important; }
 
-  /* ---- 2. Report-print mode: hide chrome, reveal only the report ---- */
+  @page { size: A4 portrait; margin: 10mm 8mm; }
+
+  /* ---------- Mode B: report ---------- */
   body:not(.printing-voucher) * { visibility: hidden !important; }
   body:not(.printing-voucher) .report-card,
   body:not(.printing-voucher) .report-card *,
@@ -251,8 +455,6 @@ h1, h2, h3, h4 {
   body:not(.printing-voucher) .print-hidden,
   body:not(.printing-voucher) .no-print { display: none !important; }
 
-  @page { size: A4 portrait; margin: 10mm 8mm; }
-
   html, body {
     background: #ffffff !important;
     height: auto !important;
@@ -260,10 +462,7 @@ h1, h2, h3, h4 {
     font-size: 11px !important;
   }
 
-  /* ---- 3. THE FIX: unclip every layout wrapper so the table can use
-             the full page width instead of staying at its screen width ---- */
-
-  /* The flex shells that normally constrain width */
+  /* Unclip layout wrappers so the report table uses the full page width. */
   .app-shell,
   .main,
   .page {
@@ -275,8 +474,6 @@ h1, h2, h3, h4 {
     overflow: visible !important;
   }
 
-  /* The report card must be static (not absolute) so width:100% resolves
-     against the actual page, not an arbitrary containing block. */
   .report-card {
     position: static !important;
     width: 100% !important;
@@ -289,8 +486,6 @@ h1, h2, h3, h4 {
     overflow: visible !important;
   }
 
-  /* The wrapper element that normally provides horizontal scroll must
-     stop clipping during print — otherwise the table stays cut off. */
   .report-card .table-wrap,
   .table-wrap {
     overflow: visible !important;
@@ -298,7 +493,6 @@ h1, h2, h3, h4 {
     border-radius: 0 !important;
   }
 
-  /* The table itself: fit the page, wrap long cells, no overflow. */
   .report-card table {
     width: 100% !important;
     max-width: 100% !important;
@@ -307,10 +501,8 @@ h1, h2, h3, h4 {
     font-size: 9.5px !important;
     table-layout: fixed !important;
   }
-
   .report-card thead { display: table-header-group !important; }
-  .report-card tr    { page-break-inside: avoid !important; }
-
+  .report-card tr { page-break-inside: avoid !important; }
   .report-card th,
   .report-card td {
     padding: 3px 5px !important;
@@ -320,9 +512,7 @@ h1, h2, h3, h4 {
     line-height: 1.25 !important;
     color: #111 !important;
     background: transparent !important;
-    font-size: 9.5px !important;
   }
-
   .report-card thead th {
     background: #efefef !important;
     font-weight: 600 !important;
@@ -331,7 +521,6 @@ h1, h2, h3, h4 {
     letter-spacing: 0.03em !important;
   }
 
-  /* Summary strip — 5 cells across the top of the sheet. */
   .report-card .report-summary {
     display: grid !important;
     grid-template-columns: repeat(5, 1fr) !important;
@@ -355,15 +544,7 @@ h1, h2, h3, h4 {
   }
 }
 
-.print-only { display: none; }
-
-/* Non-print: hide the print-only header */
-.print-only { display: none; }
-
 /* --------------------------------------------------------------------------
-   5. Chart.js canvas sizing — the dashboard relies on these max-heights, so
-      it's easier to set them here than to repeat a utility on every canvas.
+   8. Chart.js canvas sizing — the dashboard relies on these.
    -------------------------------------------------------------------------- */
-canvas {
-  max-height: 240px;
-}
+canvas { max-height: 240px; }
