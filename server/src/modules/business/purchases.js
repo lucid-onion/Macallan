@@ -144,7 +144,7 @@ router.post("/", requirePermission("purchases", "create"), async (req, res, next
 
     // If a payment was entered, log it as a transaction tied to this purchase.
     let payment = null;
-    if (amount_paid && amount_paid > 0) {
+    if (amount_paid !== undefined && amount_paid !== null && Number(amount_paid) >= 0) {
       const paidMethod = payment_method || "Cash";
       const { rows } = await query(
         `INSERT INTO transactions
