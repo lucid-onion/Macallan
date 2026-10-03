@@ -137,7 +137,7 @@ router.post("/", requirePermission("sales", "create"), async (req, res, next) =>
 
     // If the customer paid something at create time, log it as a transaction.
     let payment = null;
-    if (amount_received && amount_received > 0) {
+    if (amount_received !== undefined && amount_received !== null && Number(amount_received) >= 0) {
       const paidMethod = payment_method || "Cash";
       const { rows } = await query(
         `INSERT INTO transactions
