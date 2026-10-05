@@ -3,8 +3,11 @@ import cookieParser from "cookie-parser";
 import helmet from "helmet";
 import cors from "cors";
 import rateLimit from "express-rate-limit";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 
-import { loadUser } from "./middleware/auth.js";
+import { loadUser, requireAuth } from "./middleware/auth.js";
+import { requirePermission } from "./middleware/rbac.js";
 import { errorHandler } from "./utils/errors.js";
 
 import authRoutes from "./modules/auth/routes.js";
@@ -23,6 +26,8 @@ import officeExpRoutes from "./modules/business/office_expenses.js";
 import demolitionRoutes from "./modules/business/demolition.js";
 import reportsRoutes from "./modules/business/reports.js";
 import companiesRoutes from "./modules/business/companies.js";
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 export function createApp() {
   const app = express();
@@ -63,6 +68,15 @@ export function createApp() {
   app.use("/api/office-expenses", officeExpRoutes);
   app.use("/api/demolition", demolitionRoutes);
   app.use("/api/reports", reportsRoutes);
+
+  // ---- Serve the built React frontend (client/dist) ----
+  // Any non-/api request falls through to the SPA entry point, so React
+  // Router handles the client-side routes (/dashboard, /sales, etc.).
+  const clientDist = path.resolve(__dirname, "../../client/dist");
+  app.use(express.static(clientDist));
+  app.get(/^(?!\/api).*/, (_req, res) => {
+    res.sendFile(path.join(clientDist, "index.html"));
+  });
 
   // JSON 404 for any unmatched /api/* route (so the client's res.json()
   // never chokes on Express's default HTML page).
