@@ -1,7 +1,7 @@
 ﻿/* ==========================================================================
-   Purchases.jsx — "All Scrap Nepal" style purchase entry.
-   Fields and layout mirror the printed truck slip; the optional Payment
-   block logs a real transaction (purchase_payment, direction=out).
+   Purchases.jsx — multi-line purchase entry.
+   Each added line gets its own invoice number; truck/transport/date shared.
+   Uses POST /api/purchases/batch so the whole trip is saved atomically.
    ========================================================================== */
 import { useEffect, useMemo, useState } from "react";
 import { api } from "../api/client";
@@ -16,22 +16,28 @@ import { bsToday, bsToAdString, adToBs, formatBs } from "../lib/nepali-date";
 
 const todayBs = bsToday();
 
-const EMPTY_FORM = {
-  supplier_id: "",
+const emptyLine = () => ({
   invoice: "",
+  supplier_id: "",
   material: "",
+  gross_qty: "",
+  dust_qty: "0",
+  rate: "",
+  contact_person: "",
+  contact_phone: "",
+  status: "Delivered",
+  amount_paid: "0",
+  payment_method: "Cash",
+  cash_source: "",
+  paid_by: "",
+  signature: "",
+});
 
+const EMPTY_HEADER = {
   date_bs_year:  todayBs.year,
   date_bs_month: todayBs.month,
   date_bs_day:   todayBs.day,
   date_ad:       bsToAdString(todayBs),
-
-  gross_qty: "",
-  dust_qty: "0",
-  rate: "",
-
-  contact_person: "",
-  contact_phone: "",
 
   truck_weight_kg: "",
   truck_no: "",
@@ -46,14 +52,9 @@ const EMPTY_FORM = {
   road_expense: "0",
   tax_gbse: "0",
 
-  amount_paid: "0",
-  payment_method: "Cash",
-  cash_source: "",
-  paid_by: "",
-  signature: "",
-
   status: "Delivered",
-  company: "ASN Demolition Pvt.Ltd",
+  company_from: "ASN Demolition Pvt.Ltd",
+  company_to: "",
 };
 
 const num = (v) => { const n = Number(v); return isFinite(n) ? n : 0; };
@@ -64,12 +65,33 @@ const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) =>
   ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c])
 );
 
+const lineComputed = (line) => {
+  const gross = num(line.gross_qty);
+  const dust  = num(line.dust_qty);
+  const net   = Math.max(0, gross - dust);
+  const rate  = num(line.rate);
+  const total = net * rate;
+  const due   = Math.max(0, total - num(line.amount_paid));
+  return { gross, dust, net, rate, total, due };
+};
+
+const headerTransportTotal = (h) =>
+  num(h.transport_fee) + num(h.labor_charge) + num(h.road_expense) + num(h.tax_gbse);
+
+const nextInvoiceFrom = (invoices) => {
+  const max = invoices.reduce((m, inv) => {
+    const match = /^PUR-(\d+)/.exec(inv || "");
+    return match ? Math.max(m, parseInt(match[1], 10)) : m;
+  }, 0);
+  return `PUR-${String(max + 1).padStart(4, "0")}`;
+};
+
 export default function Purchases() {
-  const { has, canDelete  } = useAuth();
+  const { has, canDelete } = useAuth();
   const canCreate = has("purchases", "create");
   const canUpdate = has("purchases", "update");
   const canDel    = canDelete("purchases");
-  
+
   const [rows, setRows] = useState([]);
   const [suppliers, setSuppliers] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -81,7 +103,8 @@ export default function Purchases() {
 
   const [showForm, setShowForm] = useState(false);
   const [editing, setEditing] = useState(null);
-  const [form, setForm] = useState(EMPTY_FORM);
+  const [header, setHeader] = useState(EMPTY_HEADER);
+  const [lines, setLines] = useState([emptyLine()]);
   const [saving, setSaving] = useState(false);
   const [formError, setFormError] = useState(null);
 
@@ -107,39 +130,21 @@ export default function Purchases() {
   }
   useEffect(() => { load(); }, []);
 
-  /* ---------- Live computations ---------- */
-  const computed = useMemo(() => {
-    const gross = num(form.gross_qty);
-    const dust  = num(form.dust_qty);
-    const net   = Math.max(0, gross - dust);
-    const rate  = num(form.rate);
-    const total = net * rate;
-    const transportTotal =
-      num(form.transport_fee) + num(form.labor_charge) +
-      num(form.road_expense) + num(form.tax_gbse);
-    const due = Math.max(0, total - num(form.amount_paid));
-    return { gross, dust, net, rate, total, transportTotal, due };
-  }, [
-    form.gross_qty, form.dust_qty, form.rate,
-    form.transport_fee, form.labor_charge, form.road_expense, form.tax_gbse,
-    form.amount_paid,
-  ]);
-
-  /* BS <-> AD live sync */
+  /* ---------- BS <-> AD sync ---------- */
   useEffect(() => {
     if (!showForm) return;
-    const y = Number(form.date_bs_year);
-    const m = Number(form.date_bs_month);
-    const d = Number(form.date_bs_day);
+    const y = Number(header.date_bs_year);
+    const m = Number(header.date_bs_month);
+    const d = Number(header.date_bs_day);
     if (!y || !m || !d) return;
     try {
       const s = bsToAdString({ year: y, month: m, day: d });
-      if (s !== form.date_ad) setForm((f) => ({ ...f, date_ad: s }));
+      if (s !== header.date_ad) setHeader((h) => ({ ...h, date_ad: s }));
     } catch { /* invalid combination */ }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [form.date_bs_year, form.date_bs_month, form.date_bs_day, showForm]);
+  }, [header.date_bs_year, header.date_bs_month, header.date_bs_day, showForm]);
 
-  /* ---------- Filters ---------- */
+  /* ---------- Lookups ---------- */
   const supplierNameById = useMemo(() => {
     const m = new Map();
     suppliers.forEach((s) => m.set(s.id, s.name));
@@ -164,7 +169,8 @@ export default function Purchases() {
     const total = rows.reduce((s, r) => s + num(r.total), 0);
     const qty   = rows.reduce((s, r) => s + num(r.net_qty), 0);
     const transportTotal = rows.reduce(
-      (s, r) => s + num(r.transport_fee) + num(r.labor_charge) + num(r.road_expense) + num(r.tax_gbse),
+      (s, r) => s + num(r.transport_fee) + num(r.labor_charge) +
+                 num(r.road_expense)  + num(r.tax_gbse),
       0
     );
     const delivered = rows.filter((r) => r.status === "Delivered").length;
@@ -176,37 +182,28 @@ export default function Purchases() {
     ];
   }, [rows]);
 
-  /* ---------- Form actions ---------- */
+  /* ---------- Form open/close ---------- */
   function openCreate() {
     setEditing(null);
-    setForm({
-      ...EMPTY_FORM,
+    setHeader({ ...EMPTY_HEADER });
+    const existingInvoices = rows.map((r) => r.invoice);
+    const first = {
+      ...emptyLine(),
+      invoice: nextInvoiceFrom(existingInvoices),
       supplier_id: suppliers[0]?.id || "",
-      invoice: `PUR-${String(rows.length + 1).padStart(4, "0")}`,
-    });
+    };
+    setLines([first]);
     setFormError(null);
     setShowForm(true);
   }
 
   function openEdit(row) {
     setEditing(row);
-    setForm({
-      supplier_id: row.supplier_id || "",
-      invoice: row.invoice || "",
-      material: row.material || "",
-
+    setHeader({
       date_bs_year:  row.date_bs_year  || todayBs.year,
       date_bs_month: row.date_bs_month || todayBs.month,
       date_bs_day:   row.date_bs_day   || todayBs.day,
       date_ad:       row.date_ad ? String(row.date_ad).slice(0, 10) : bsToAdString(todayBs),
-
-      gross_qty: row.gross_qty ?? "",
-      dust_qty:  row.dust_qty  ?? "0",
-      rate:      row.rate      ?? "",
-
-      contact_person: row.contact_person || "",
-      contact_phone:  row.contact_phone  || "",
-
       truck_weight_kg:    row.truck_weight_kg ?? "",
       truck_no:           row.truck_no || "",
       truck_driver:       row.truck_driver || "",
@@ -214,84 +211,126 @@ export default function Purchases() {
       from_location:      row.from_location || "",
       to_location:        row.to_location || "",
       loader_name:        row.loader_name || "",
-
       transport_fee: row.transport_fee ?? "0",
       labor_charge:  row.labor_charge  ?? "0",
       road_expense:  row.road_expense  ?? "0",
       tax_gbse:      row.tax_gbse      ?? "0",
-
+      status:  row.status  || "Delivered",
+      company_from: row.company || "ASN Demolition Pvt.Ltd",
+      company_to:   "",
+    });
+    setLines([{
+      invoice: row.invoice || "",
+      supplier_id: row.supplier_id || "",
+      material: row.material || "",
+      gross_qty: row.gross_qty ?? "",
+      dust_qty:  row.dust_qty  ?? "0",
+      rate:      row.rate      ?? "",
+      contact_person: row.contact_person || "",
+      contact_phone:  row.contact_phone  || "",
+      status:  row.status || "Delivered",
       amount_paid: "0",
       payment_method: "Cash",
       cash_source: row.cash_source || "",
       paid_by:     row.paid_by     || "",
       signature:   row.signature   || "",
-
-      status:  row.status  || "Delivered",
-      company: row.company || "ASN Demolition Pvt.Ltd",
-    });
+    }]);
     setFormError(null);
     setShowForm(true);
   }
 
+  /* ---------- Line mutations ---------- */
+  function addLine() {
+    setLines((ls) => {
+      const all = [...rows.map((r) => r.invoice), ...ls.map((l) => l.invoice)];
+      const next = nextInvoiceFrom(all);
+      return [...ls, { ...emptyLine(), invoice: next, supplier_id: suppliers[0]?.id || "" }];
+    });
+  }
+  function removeLine(i) {
+    setLines((ls) => (ls.length === 1 ? ls : ls.filter((_, idx) => idx !== i)));
+  }
+  function patchLine(i, patch) {
+    setLines((ls) => ls.map((l, idx) => (idx === i ? { ...l, ...patch } : l)));
+  }
+
+  /* ---------- Save ---------- */
   async function save(e) {
     e.preventDefault();
     setSaving(true);
     setFormError(null);
 
-    try {
-      const payload = {
-        invoice:     form.invoice.trim(),
-        supplier_id: Number(form.supplier_id),
-        material:    form.material.trim(),
+    for (let i = 0; i < lines.length; i++) {
+      const l = lines[i];
+      const c = lineComputed(l);
+      if (!l.invoice.trim())   { setFormError(`Line ${i + 1}: invoice is required.`);   setSaving(false); return; }
+      if (!l.supplier_id)      { setFormError(`Line ${i + 1}: select a supplier.`);     setSaving(false); return; }
+      if (!l.material.trim())  { setFormError(`Line ${i + 1}: material is required.`);  setSaving(false); return; }
+      if (c.gross <= 0)        { setFormError(`Line ${i + 1}: gross qty must be > 0.`); setSaving(false); return; }
+      if (c.rate <= 0)         { setFormError(`Line ${i + 1}: rate must be > 0.`);      setSaving(false); return; }
+    }
 
-        date_bs_year:  Number(form.date_bs_year),
-        date_bs_month: Number(form.date_bs_month),
-        date_bs_day:   Number(form.date_bs_day),
-        date_ad:       form.date_ad,
+    const baseHeader = {
+      date_bs_year:  Number(header.date_bs_year),
+      date_bs_month: Number(header.date_bs_month),
+      date_bs_day:   Number(header.date_bs_day),
+      date_ad:       header.date_ad,
 
-        gross_qty: computed.gross,
-        dust_qty:  computed.dust,
-        net_qty:   computed.net,
-        rate:      computed.rate,
-        total:     computed.total,
+      truck_weight_kg:    num(header.truck_weight_kg) || undefined,
+      truck_no:           header.truck_no.trim()           || undefined,
+      truck_driver:       header.truck_driver.trim()       || undefined,
+      truck_driver_phone: header.truck_driver_phone.trim() || undefined,
+      from_location:      header.from_location.trim()      || undefined,
+      to_location:        header.to_location.trim()        || undefined,
+      loader_name:        header.loader_name.trim()        || undefined,
 
-        contact_person: form.contact_person.trim() || undefined,
-        contact_phone:  form.contact_phone.trim()  || undefined,
+      company: header.company_from.trim() || undefined,
+    };
 
-        truck_weight_kg:    num(form.truck_weight_kg) || undefined,
-        truck_no:           form.truck_no.trim()           || undefined,
-        truck_driver:       form.truck_driver.trim()       || undefined,
-        truck_driver_phone: form.truck_driver_phone.trim() || undefined,
-        from_location:      form.from_location.trim()      || undefined,
-        to_location:        form.to_location.trim()        || undefined,
-        loader_name:        form.loader_name.trim()        || undefined,
+    const linePayload = (l, i) => {
+      const c = lineComputed(l);
+      const isFirst = i === 0;
+      return {
+        ...baseHeader,
+        invoice: l.invoice.trim(),
+        supplier_id: Number(l.supplier_id),
+        material:    l.material.trim(),
 
-        transport_fee: num(form.transport_fee),
-        labor_charge:  num(form.labor_charge),
-        road_expense:  num(form.road_expense),
-        tax_gbse:      num(form.tax_gbse),
+        gross_qty: c.gross,
+        dust_qty:  c.dust,
+        net_qty:   c.net,
+        rate:      c.rate,
+        total:     c.total,
 
-        status:  form.status,
-        company: form.company.trim() || undefined,
+        contact_person: l.contact_person.trim() || undefined,
+        contact_phone:  l.contact_phone.trim()  || undefined,
+
+        transport_fee: isFirst ? num(header.transport_fee) : 0,
+        labor_charge:  isFirst ? num(header.labor_charge)  : 0,
+        road_expense:  isFirst ? num(header.road_expense)  : 0,
+        tax_gbse:      isFirst ? num(header.tax_gbse)      : 0,
+
+        status: l.status,
       };
+    };
 
-      // Only send payment fields on create — editing is parent-only.
-      if (!editing) {
-        payload.amount_paid     = num(form.amount_paid);
-        payload.payment_method  = form.payment_method;
-        payload.cash_source     = form.cash_source.trim() || undefined;
-        payload.paid_by         = form.paid_by.trim()     || undefined;
-        payload.signature       = form.signature.trim()   || undefined;
+    try {
+      if (editing) {
+        // Editing a single existing row — no batch, no multi-line.
+        await api.patch(`/api/purchases/${editing.id}`, linePayload(lines[0], 0));
+      } else {
+        // Batch create — one POST, one transaction on the server.
+        const payloads = lines.map((l, i) => {
+          const p = linePayload(l, i);
+          p.amount_paid    = num(l.amount_paid);
+          p.payment_method = l.payment_method;
+          p.cash_source    = l.cash_source.trim() || undefined;
+          p.paid_by        = l.paid_by.trim()     || undefined;
+          p.signature      = l.signature.trim()   || undefined;
+          return p;
+        });
+        await api.post("/api/purchases/batch", { lines: payloads });
       }
-
-      if (!payload.invoice)      { setFormError("Invoice is required.");                 return; }
-      if (!payload.supplier_id)  { setFormError("Select a supplier.");                   return; }
-      if (!payload.material)     { setFormError("Material is required.");                return; }
-      if (payload.gross_qty <= 0){ setFormError("Gross quantity must be positive.");     return; }
-      if (payload.rate <= 0)     { setFormError("Rate must be positive.");               return; }
-
-      if (editing) await api.patch(`/api/purchases/${editing.id}`, payload);
-      else         await api.post(`/api/purchases`, payload);
 
       setShowForm(false);
       await load();
@@ -323,9 +362,7 @@ export default function Purchases() {
       return (items || []).filter(
         (t) => t.ref_type === "purchase" && Number(t.ref_id) === Number(id)
       );
-    } catch {
-      return [];
-    }
+    } catch { return []; }
   }
 
   async function printPurchaseInvoice(row) {
@@ -333,10 +370,9 @@ export default function Purchases() {
     const payments = await fetchPaymentsForPurchase(row.id);
     const paidTotal = payments.reduce((s, p) => s + num(p.amount), 0);
     const due = Math.max(0, num(row.total) - paidTotal);
-
     const transportTotal =
       num(row.transport_fee) + num(row.labor_charge) +
-      num(row.road_expense) + num(row.tax_gbse);
+      num(row.road_expense)  + num(row.tax_gbse);
 
     const paymentRows = payments.map((p) => `
       <tr>
@@ -383,12 +419,8 @@ export default function Purchases() {
         <table class="doc-table">
           <thead>
             <tr>
-              <th>Material</th>
-              <th class="num">Gross Qty</th>
-              <th class="num">Dust</th>
-              <th class="num">Net Qty</th>
-              <th class="num">Rate / kg</th>
-              <th class="num">Amount</th>
+              <th>Material</th><th class="num">Gross Qty</th><th class="num">Dust</th>
+              <th class="num">Net Qty</th><th class="num">Rate / kg</th><th class="num">Amount</th>
             </tr>
           </thead>
           <tbody>
@@ -407,12 +439,7 @@ export default function Purchases() {
           <div class="doc-section-title">Payments Made</div>
           <table class="doc-table">
             <thead>
-              <tr>
-                <th>Date (BS)</th>
-                <th>Method</th>
-                <th>Note</th>
-                <th class="num">Amount</th>
-              </tr>
+              <tr><th>Date (BS)</th><th>Method</th><th>Note</th><th class="num">Amount</th></tr>
             </thead>
             <tbody>${paymentRows}</tbody>
           </table>` : ""}
@@ -460,22 +487,14 @@ export default function Purchases() {
     { key: "rate",      label: "Rate",  numeric: true, render: (r) => `${rupees(r.rate)}/kg` },
     { key: "total", label: "Total", numeric: true, render: (r) => rupees(r.total) },
     { key: "paid_amount", label: "Paid", numeric: true,
-      render: (r) => (
-        <span className="text-positive">{rupees(r.paid_amount || 0)}</span>
-      ) },
+      render: (r) => <span className="text-positive">{rupees(r.paid_amount || 0)}</span> },
     { key: "due_amount", label: "Balance", numeric: true,
       render: (r) => {
         const due = r.due_amount || 0;
-        return (
-          <span className={due > 0 ? "text-negative" : "text-ink-faint"}>
-            {rupees(due)}
-          </span>
-        );
+        return <span className={due > 0 ? "text-negative" : "text-ink-faint"}>{rupees(due)}</span>;
       } },
     { key: "status", label: "Status",
-      render: (r) => (
-        <Badge variant={r.status === "Delivered" ? "positive" : "warning"}>{r.status}</Badge>
-      ) },
+      render: (r) => <Badge variant={r.status === "Delivered" ? "positive" : "warning"}>{r.status}</Badge> },
     { key: "actions", label: "", render: (r) => (
       <div className="flex gap-1.5 justify-end">
         {canUpdate && (
@@ -571,8 +590,8 @@ export default function Purchases() {
           }
         >
           <div className="grid grid-cols-2 gap-x-5 gap-y-2.5 mb-4 max-[560px]:grid-cols-1">
-            <DetailPair label="Paid So Far" value={<span className="text-positive">{rupees(detail.paid_amount || 0)}</span>}/>
-            <DetailPair label="Balance Due" value={<span className={(detail.due_amount || 0) > 0 ? "text-negative" : "text-ink-faint"}>{rupees(detail.due_amount || 0)}</span>}/>
+            <DetailPair label="Paid So Far" value={<span className="text-positive">{rupees(detail.paid_amount || 0)}</span>} />
+            <DetailPair label="Balance Due" value={<span className={(detail.due_amount || 0) > 0 ? "text-negative" : "text-ink-faint"}>{rupees(detail.due_amount || 0)}</span>} />
             <DetailPair label="Supplier" value={supplierNameById.get(detail.supplier_id) || "—"} />
             <DetailPair label="Person Name" value={detail.contact_person || "—"} />
             <DetailPair label="Phone Number" value={detail.contact_phone || "—"} />
@@ -603,14 +622,16 @@ export default function Purchases() {
       {/* Create / edit modal */}
       {showForm && (
         <Modal
-          title={editing ? `Edit Purchase — ${editing.invoice}` : "New Purchase"}
+          title={editing
+            ? `Edit Purchase — ${editing.invoice}`
+            : `New Purchase — ${lines.length} line${lines.length > 1 ? "s" : ""}`}
           onClose={() => setShowForm(false)}
           wide
           footer={
             <>
               <Button onClick={() => setShowForm(false)} disabled={saving}>Cancel</Button>
               <Button variant="primary" type="submit" form="purchase-form" disabled={saving}>
-                {saving ? "Saving…" : editing ? "Save Changes" : "Save Purchase"}
+                {saving ? "Saving…" : editing ? "Save Changes" : `Save ${lines.length > 1 ? `${lines.length} Purchases` : "Purchase"}`}
               </Button>
             </>
           }
@@ -622,224 +643,252 @@ export default function Purchases() {
               </div>
             )}
 
-            <p className="text-[12px] text-ink-faint bg-surface-sunken rounded-sm px-3 py-2 mb-4">
-              Purchased quantity (net, after dust) is added automatically to Inventory if the material name matches an existing item.
+            {/* ============ SHARED HEADER ============ */}
+            <h4 className="text-[13.5px] font-semibold mb-2">Truck Trip — shared header</h4>
+            <p className="text-[11.5px] text-ink-faint bg-surface-sunken rounded-sm px-3 py-2 mb-4">
+              All purchases below share this date, truck and transport cost. Each purchase gets its own invoice and supplier.
             </p>
 
             <div className="grid grid-cols-2 gap-3.5 mb-5 max-[560px]:grid-cols-1">
-              <Field label="Supplier" span={2}>
-                <select className={selectCls} value={form.supplier_id} required
-                  onChange={(e) => setForm((f) => ({ ...f, supplier_id: e.target.value }))}>
-                  <option value="">— select —</option>
-                  {suppliers.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
+              <Field label="Status">
+                <select className={selectCls} value={header.status}
+                  onChange={(e) => setHeader((h) => ({ ...h, status: e.target.value }))}>
+                  <option value="Delivered">Delivered</option>
+                  <option value="Pending">Pending</option>
                 </select>
               </Field>
-              <Field label="Person Name">
-                <input className={inputCls} value={form.contact_person}
-                  onChange={(e) => setForm((f) => ({ ...f, contact_person: e.target.value }))}
-                  placeholder="Person in charge" />
+              <Field label="Company From">
+                <input className={inputCls} value={header.company_from}
+                  onChange={(e) => setHeader((h) => ({ ...h, company_from: e.target.value }))} />
               </Field>
-              <Field label="Phone Number">
-                <input className={inputCls} value={form.contact_phone}
-                  onChange={(e) => setForm((f) => ({ ...f, contact_phone: e.target.value }))}
-                  placeholder="98XXXXXXXX" />
+              <Field label="Company To">
+                <input className={inputCls} value={header.company_to}
+                  placeholder="Receiving company"
+                  onChange={(e) => setHeader((h) => ({ ...h, company_to: e.target.value }))} />
               </Field>
+              <div />
 
               <Field label="Date (BS Year)">
-                <input type="number" min="2000" max="2200" className={inputCls} value={form.date_bs_year}
-                  onChange={(e) => setForm((f) => ({ ...f, date_bs_year: e.target.value }))} />
+                <input type="number" min="2000" max="2200" className={inputCls} value={header.date_bs_year}
+                  onChange={(e) => setHeader((h) => ({ ...h, date_bs_year: e.target.value }))} />
               </Field>
               <Field label="Date (BS Month 1-12)">
-                <input type="number" min="1" max="12" className={inputCls} value={form.date_bs_month}
-                  onChange={(e) => setForm((f) => ({ ...f, date_bs_month: e.target.value }))} />
+                <input type="number" min="1" max="12" className={inputCls} value={header.date_bs_month}
+                  onChange={(e) => setHeader((h) => ({ ...h, date_bs_month: e.target.value }))} />
               </Field>
               <Field label="Date (BS Day)">
-                <input type="number" min="1" max="32" className={inputCls} value={form.date_bs_day}
-                  onChange={(e) => setForm((f) => ({ ...f, date_bs_day: e.target.value }))} />
+                <input type="number" min="1" max="32" className={inputCls} value={header.date_bs_day}
+                  onChange={(e) => setHeader((h) => ({ ...h, date_bs_day: e.target.value }))} />
               </Field>
               <Field label="Date (AD)" hint="auto-synced with BS">
-                <input type="date" className={inputCls} value={form.date_ad}
+                <input type="date" className={inputCls} value={header.date_ad}
                   onChange={(e) => {
                     const ad = e.target.value;
-                    setForm((f) => ({ ...f, date_ad: ad }));
+                    setHeader((h) => ({ ...h, date_ad: ad }));
                     try {
                       const d = new Date(ad);
                       if (!isNaN(d)) {
                         const bs = adToBs(d);
-                        setForm((f) => ({
-                          ...f,
+                        setHeader((h) => ({
+                          ...h,
                           date_bs_year: bs.year, date_bs_month: bs.month, date_bs_day: bs.day, date_ad: ad,
                         }));
                       }
                     } catch { /* ignore */ }
                   }} />
               </Field>
-
-              <Field label="Invoice #">
-                <input className={inputCls} value={form.invoice} required
-                  onChange={(e) => setForm((f) => ({ ...f, invoice: e.target.value }))} />
-              </Field>
-              <Field label="Material">
-                <input className={inputCls} value={form.material} required
-                  placeholder="e.g. TMT Rod 12mm"
-                  onChange={(e) => setForm((f) => ({ ...f, material: e.target.value }))} />
-              </Field>
-
-              <Field label="Gross Qty (kg)">
-                <input type="number" min="0" step="0.001" className={inputCls} value={form.gross_qty} required
-                  onChange={(e) => setForm((f) => ({ ...f, gross_qty: e.target.value }))} />
-              </Field>
-              <Field label="Dust (kg)">
-                <input type="number" min="0" step="0.001" className={inputCls} value={form.dust_qty}
-                  onChange={(e) => setForm((f) => ({ ...f, dust_qty: e.target.value }))} />
-              </Field>
-              <Field label="Net Qty (computed)">
-                <div className={inputCls + " !bg-steel-tint !text-steel-dark font-semibold"}>
-                  {kg(computed.net)}
-                </div>
-              </Field>
-              <Field label="Rate (Rs/kg)">
-                <input type="number" min="0" step="0.01" className={inputCls} value={form.rate} required
-                  onChange={(e) => setForm((f) => ({ ...f, rate: e.target.value }))} />
-              </Field>
-
-              <Field label="Total (real product amount)" span={2}>
-                <div className={inputCls + " !bg-steel-tint !text-steel-dark font-semibold !text-[15px]"}>
-                  {rupees(computed.total)}
-                </div>
-              </Field>
-
-              <Field label="Status">
-                <select className={selectCls} value={form.status}
-                  onChange={(e) => setForm((f) => ({ ...f, status: e.target.value }))}>
-                  <option value="Delivered">Delivered</option>
-                  <option value="Pending">Pending</option>
-                </select>
-              </Field>
-              <Field label="Company">
-                <input className={inputCls} value={form.company}
-                  onChange={(e) => setForm((f) => ({ ...f, company: e.target.value }))} />
-              </Field>
             </div>
 
-            {/* ---- Truck & Transport ---- */}
             <h4 className="text-[13.5px] font-semibold mb-2 pt-4 border-t border-dashed border-line">
-              Truck &amp; Transport Detail (required)
+              Truck &amp; Transport Detail
             </h4>
-            <p className="text-[11.5px] text-ink-faint bg-surface-sunken rounded-sm px-3 py-2 mb-4">
-              Matches the printed "All Scrap Nepal" truck-detail slip. This is also what gets saved as this purchase's delivery on the Transportation page — no separate delivery entry needed.
-            </p>
-
             <div className="grid grid-cols-2 gap-3.5 mb-5 max-[560px]:grid-cols-1">
               <Field label="Truck Weight (kg)">
-                <input type="number" min="0" step="0.01" className={inputCls} value={form.truck_weight_kg}
-                  onChange={(e) => setForm((f) => ({ ...f, truck_weight_kg: e.target.value }))} />
+                <input type="number" min="0" step="0.01" className={inputCls} value={header.truck_weight_kg}
+                  onChange={(e) => setHeader((h) => ({ ...h, truck_weight_kg: e.target.value }))} />
               </Field>
               <Field label="Truck No.">
-                <input className={inputCls} value={form.truck_no}
-                  onChange={(e) => setForm((f) => ({ ...f, truck_no: e.target.value }))}
+                <input className={inputCls} value={header.truck_no}
+                  onChange={(e) => setHeader((h) => ({ ...h, truck_no: e.target.value }))}
                   placeholder="BA 1 KHA 1234" />
               </Field>
               <Field label="Driver Name">
-                <input className={inputCls} value={form.truck_driver}
-                  onChange={(e) => setForm((f) => ({ ...f, truck_driver: e.target.value }))}
-                  placeholder="Driver's full name" />
+                <input className={inputCls} value={header.truck_driver}
+                  onChange={(e) => setHeader((h) => ({ ...h, truck_driver: e.target.value }))} />
               </Field>
               <Field label="Driver No.">
-                <input className={inputCls} value={form.truck_driver_phone}
-                  onChange={(e) => setForm((f) => ({ ...f, truck_driver_phone: e.target.value }))}
-                  placeholder="98XXXXXXXX" />
+                <input className={inputCls} value={header.truck_driver_phone}
+                  onChange={(e) => setHeader((h) => ({ ...h, truck_driver_phone: e.target.value }))} />
               </Field>
               <Field label="From">
-                <input className={inputCls} value={form.from_location}
-                  onChange={(e) => setForm((f) => ({ ...f, from_location: e.target.value }))}
-                  placeholder="Yard / warehouse address" />
+                <input className={inputCls} value={header.from_location}
+                  onChange={(e) => setHeader((h) => ({ ...h, from_location: e.target.value }))} />
               </Field>
               <Field label="To">
-                <input className={inputCls} value={form.to_location}
-                  onChange={(e) => setForm((f) => ({ ...f, to_location: e.target.value }))}
-                  placeholder="Destination" />
+                <input className={inputCls} value={header.to_location}
+                  onChange={(e) => setHeader((h) => ({ ...h, to_location: e.target.value }))} />
               </Field>
               <Field label="Loader Name">
-                <input className={inputCls} value={form.loader_name}
-                  onChange={(e) => setForm((f) => ({ ...f, loader_name: e.target.value }))}
-                  placeholder="Responsible loading person" />
+                <input className={inputCls} value={header.loader_name}
+                  onChange={(e) => setHeader((h) => ({ ...h, loader_name: e.target.value }))} />
               </Field>
               <Field label="Transport Fee (Rs)">
-                <input type="number" min="0" step="0.01" className={inputCls} value={form.transport_fee}
-                  onChange={(e) => setForm((f) => ({ ...f, transport_fee: e.target.value }))} />
+                <input type="number" min="0" step="0.01" className={inputCls} value={header.transport_fee}
+                  onChange={(e) => setHeader((h) => ({ ...h, transport_fee: e.target.value }))} />
               </Field>
               <Field label="Labor Charge (Rs)">
-                <input type="number" min="0" step="0.01" className={inputCls} value={form.labor_charge}
-                  onChange={(e) => setForm((f) => ({ ...f, labor_charge: e.target.value }))} />
+                <input type="number" min="0" step="0.01" className={inputCls} value={header.labor_charge}
+                  onChange={(e) => setHeader((h) => ({ ...h, labor_charge: e.target.value }))} />
               </Field>
               <Field label="Road Expenses (Rs)">
-                <input type="number" min="0" step="0.01" className={inputCls} value={form.road_expense}
-                  onChange={(e) => setForm((f) => ({ ...f, road_expense: e.target.value }))} />
+                <input type="number" min="0" step="0.01" className={inputCls} value={header.road_expense}
+                  onChange={(e) => setHeader((h) => ({ ...h, road_expense: e.target.value }))} />
               </Field>
               <Field label="Tax Paid (G.B.S.E) (Rs)">
-                <input type="number" min="0" step="0.01" className={inputCls} value={form.tax_gbse}
-                  onChange={(e) => setForm((f) => ({ ...f, tax_gbse: e.target.value }))} />
+                <input type="number" min="0" step="0.01" className={inputCls} value={header.tax_gbse}
+                  onChange={(e) => setHeader((h) => ({ ...h, tax_gbse: e.target.value }))} />
               </Field>
               <Field label="Total Transport Cost" hint="(fee + labor + road + tax)">
                 <div className={inputCls + " !bg-steel-tint !text-steel-dark font-semibold"}>
-                  {rupees(computed.transportTotal)}
+                  {rupees(headerTransportTotal(header))}
                 </div>
               </Field>
             </div>
 
-            {/* ---- Payment (CREATE only) — lives inside the purchase form
-                 because its fields ride along with the purchase POST ---- */}
-            {!editing && (
-              <>
-                <h4 className="text-[13.5px] font-semibold mb-2 pt-4 border-t border-dashed border-line">
-                  Payment (optional)
-                </h4>
-                <p className="text-[11.5px] text-ink-faint bg-surface-sunken rounded-sm px-3 py-2 mb-4">
-                  If you pay the supplier something right away, enter it here — it's logged as a transaction automatically.
-                  Leave at 0 if nothing is paid yet; the rest can be paid anytime from the Transactions page. This only
-                  covers the steel — transport, labor, road and tax costs above are separate and don't reduce what's owed to the supplier.
-                </p>
+            {/* ============ PURCHASE LINES ============ */}
+            <h4 className="text-[13.5px] font-semibold mb-2 pt-4 border-t border-dashed border-line">
+              Purchases on this trip
+            </h4>
+            <p className="text-[11.5px] text-ink-faint bg-surface-sunken rounded-sm px-3 py-2 mb-4">
+              Add one line per material/supplier. Each line gets its own invoice number. The truck &amp; transport above is shared.
+            </p>
 
-                <div className="grid grid-cols-2 gap-3.5 mb-3.5 max-[560px]:grid-cols-1">
-                  <Field label="Amount Paid Now (Rs)">
-                    <input type="number" min="0" step="0.01" className={inputCls} value={form.amount_paid}
-                      onChange={(e) => setForm((f) => ({ ...f, amount_paid: e.target.value }))} />
-                  </Field>
-                  <Field label="Cash / Online">
-                    <select className={selectCls} value={form.payment_method}
-                      onChange={(e) => setForm((f) => ({ ...f, payment_method: e.target.value }))}>
-                      <option value="Cash">Cash</option>
-                      <option value="Online">Online</option>
-                    </select>
-                  </Field>
-                  <Field label="Cash Source">
-                    <input className={inputCls} value={form.cash_source}
-                      onChange={(e) => setForm((f) => ({ ...f, cash_source: e.target.value }))}
-                      placeholder="e.g. Office cash / Bank" />
-                  </Field>
-                  <Field label="Due After This">
-                    <div className={inputCls + " !bg-steel-tint !text-steel-dark font-semibold"}>
-                      {rupees(computed.due)}
-                    </div>
-                  </Field>
-                  <Field label="Paid By">
-                    <input className={inputCls} value={form.paid_by}
-                      onChange={(e) => setForm((f) => ({ ...f, paid_by: e.target.value }))}
-                      placeholder="Who handled the payment" />
-                  </Field>
-                  <Field label="Signature / Received By">
-                    <input className={inputCls} value={form.signature}
-                      onChange={(e) => setForm((f) => ({ ...f, signature: e.target.value }))}
-                      placeholder="Name confirming the slip" />
-                  </Field>
+            {lines.map((line, i) => {
+              const c = lineComputed(line);
+              return (
+                <div key={i} className="border border-line rounded-md p-3.5 mb-4 bg-surface-sunken">
+                  <div className="flex items-center justify-between mb-3">
+                    <div className="text-[13px] font-semibold">Purchase {i + 1}</div>
+                    {lines.length > 1 && (
+                      <button type="button"
+                        onClick={() => removeLine(i)}
+                        className="text-negative text-xs hover:underline">
+                        Remove
+                      </button>
+                    )}
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-3.5 mb-3.5 max-[560px]:grid-cols-1">
+                    <Field label="Invoice #">
+                      <input className={inputCls} value={line.invoice} required
+                        onChange={(e) => patchLine(i, { invoice: e.target.value })} />
+                    </Field>
+                    <Field label="Status">
+                      <select className={selectCls} value={line.status}
+                        onChange={(e) => patchLine(i, { status: e.target.value })}>
+                        <option value="Delivered">Delivered</option>
+                        <option value="Pending">Pending</option>
+                      </select>
+                    </Field>
+                    <Field label="Supplier" span={2}>
+                      <select className={selectCls} value={line.supplier_id} required
+                        onChange={(e) => patchLine(i, { supplier_id: e.target.value })}>
+                        <option value="">— select —</option>
+                        {suppliers.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
+                      </select>
+                    </Field>
+                    <Field label="Person Name">
+                      <input className={inputCls} value={line.contact_person}
+                        onChange={(e) => patchLine(i, { contact_person: e.target.value })}
+                        placeholder="Person in charge" />
+                    </Field>
+                    <Field label="Phone Number">
+                      <input className={inputCls} value={line.contact_phone}
+                        onChange={(e) => patchLine(i, { contact_phone: e.target.value })}
+                        placeholder="98XXXXXXXX" />
+                    </Field>
+
+                    <Field label="Material">
+                      <input className={inputCls} value={line.material} required
+                        placeholder="e.g. TMT Rod 12mm"
+                        onChange={(e) => patchLine(i, { material: e.target.value })} />
+                    </Field>
+                    <div />
+
+                    <Field label="Gross Qty (kg)">
+                      <input type="number" min="0" step="0.001" className={inputCls} value={line.gross_qty} required
+                        onChange={(e) => patchLine(i, { gross_qty: e.target.value })} />
+                    </Field>
+                    <Field label="Dust (kg)">
+                      <input type="number" min="0" step="0.001" className={inputCls} value={line.dust_qty}
+                        onChange={(e) => patchLine(i, { dust_qty: e.target.value })} />
+                    </Field>
+                    <Field label="Net Qty (computed)">
+                      <div className={inputCls + " !bg-steel-tint !text-steel-dark font-semibold"}>
+                        {kg(c.net)}
+                      </div>
+                    </Field>
+                    <Field label="Rate (Rs/kg)">
+                      <input type="number" min="0" step="0.01" className={inputCls} value={line.rate} required
+                        onChange={(e) => patchLine(i, { rate: e.target.value })} />
+                    </Field>
+
+                    <Field label="Total (line amount)" span={2}>
+                      <div className={inputCls + " !bg-steel-tint !text-steel-dark font-semibold !text-[15px]"}>
+                        {rupees(c.total)}
+                      </div>
+                    </Field>
+
+                    {!editing && (
+                      <>
+                        <Field label="Amount Paid Now (Rs)">
+                          <input type="number" min="0" step="0.01" className={inputCls} value={line.amount_paid}
+                            onChange={(e) => patchLine(i, { amount_paid: e.target.value })} />
+                        </Field>
+                        <Field label="Cash / Online">
+                          <select className={selectCls} value={line.payment_method}
+                            onChange={(e) => patchLine(i, { payment_method: e.target.value })}>
+                            <option value="Cash">Cash</option>
+                            <option value="Online">Online</option>
+                          </select>
+                        </Field>
+                        <Field label="Cash Source">
+                          <input className={inputCls} value={line.cash_source}
+                            onChange={(e) => patchLine(i, { cash_source: e.target.value })}
+                            placeholder="e.g. Office cash / Bank" />
+                        </Field>
+                        <Field label="Due After This">
+                          <div className={inputCls + " !bg-steel-tint !text-steel-dark font-semibold"}>
+                            {rupees(c.due)}
+                          </div>
+                        </Field>
+                        <Field label="Paid By">
+                          <input className={inputCls} value={line.paid_by}
+                            onChange={(e) => patchLine(i, { paid_by: e.target.value })} />
+                        </Field>
+                        <Field label="Signature / Received By">
+                          <input className={inputCls} value={line.signature}
+                            onChange={(e) => patchLine(i, { signature: e.target.value })} />
+                        </Field>
+                      </>
+                    )}
+                  </div>
                 </div>
-              </>
+              );
+            })}
+
+            {!editing && (
+              <div className="flex items-center gap-3">
+                <Button type="button" onClick={addLine} size="sm">
+                  + Add Another Purchase
+                </Button>
+                <span className="text-[12px] text-ink-faint">
+                  Same truck, different supplier? Add it here — the truck &amp; transport details above are shared.
+                </span>
+              </div>
             )}
           </form>
 
-          {/* ---- Payment ledger (EDIT only) — deliberately OUTSIDE the
-               purchase <form> so no nested-form bug can hijack submits. ---- */}
           {editing && (
             <div className="mt-5">
               <EditPaymentBlock
@@ -865,9 +914,7 @@ export default function Purchases() {
   );
 }
 
-/* -------------------------------------------------------------------------
-   DetailPair — small read-only label/value in the detail modal.
-   ------------------------------------------------------------------------- */
+/* ------------------------------------------------------------------------- */
 function DetailPair({ label, value }) {
   return (
     <div>
@@ -878,10 +925,8 @@ function DetailPair({ label, value }) {
 }
 
 /* -------------------------------------------------------------------------
-   EditPaymentBlock — shown inside the Edit Purchase modal, but outside the
-   purchase form. Lets the user log an additional payment (or the first
-   partial payment) against this purchase. Posts a transactions record with
-   ref_type='purchase', ref_id=<id>, direction='out'.
+   EditPaymentBlock — payments sub-panel shown inside the Edit Purchase modal
+   (outside the purchase form). Logs additional purchase payments.
    ------------------------------------------------------------------------- */
 function EditPaymentBlock({ purchase, supplierName, onPaid }) {
   const [open, setOpen] = useState(false);
@@ -916,7 +961,6 @@ function EditPaymentBlock({ purchase, supplierName, onPaid }) {
   const total = Number(purchase.total || 0);
   const due = Math.max(0, total - paidSoFar);
 
-  // Default the payment's BS date to the purchase's own date.
   const bs = {
     year:  purchase.date_bs_year  || 2083,
     month: purchase.date_bs_month || 1,
@@ -949,8 +993,6 @@ function EditPaymentBlock({ purchase, supplierName, onPaid }) {
         company:       purchase.company || undefined,
         note:          note.trim() || "Additional payment",
       };
-      // Only attach when non-empty — the server's Zod schema allows the key
-      // to be missing but not explicitly null.
       if (supplierName) payload.party_label = supplierName;
 
       await api.post("/api/transactions", payload);
@@ -974,11 +1016,9 @@ function EditPaymentBlock({ purchase, supplierName, onPaid }) {
       </h4>
       <p className="text-[11.5px] text-ink-faint bg-surface-sunken rounded-sm px-3 py-2 mb-4">
         Payments are separate ledger entries — adding one here doesn't change this purchase's amount,
-        it just reduces the supplier's outstanding balance. To edit a purchase's amount, change the
-        quantities or rate above.
+        it just reduces the supplier's outstanding balance.
       </p>
 
-      {/* Paid-so-far summary */}
       <div className="grid grid-cols-3 gap-3 mb-4 max-[560px]:grid-cols-1">
         <div className="bg-surface-sunken border border-line-soft rounded-sm px-3 py-2">
           <div className="text-[11px] text-ink-faint mb-1">Total</div>
@@ -994,7 +1034,6 @@ function EditPaymentBlock({ purchase, supplierName, onPaid }) {
         </div>
       </div>
 
-      {/* Existing payments list */}
       {loadingPayments ? (
         <div className="text-[12px] text-ink-faint py-2">Loading payments…</div>
       ) : payments.length ? (
@@ -1026,7 +1065,6 @@ function EditPaymentBlock({ purchase, supplierName, onPaid }) {
         <div className="text-[12px] text-ink-faint italic mb-4">No payments recorded yet.</div>
       )}
 
-      {/* Add-payment form — no <form> element, buttons drive submit directly */}
       {open ? (
         <div className="border border-line rounded-sm p-3 bg-surface-sunken">
           {err && (

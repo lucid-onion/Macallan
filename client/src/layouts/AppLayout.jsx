@@ -14,6 +14,7 @@ const ICONS = {
   demolition: <><path d="M3 21h18"/><path d="M5 21V10l6-5 6 5v11"/><path d="M9 21v-6h6v6"/><path d="M3 10l2-2M21 10l-2-2"/></>,
   reports: <><path d="M6 2h9l4 4v16H6z"/><path d="M15 2v4h4"/><path d="M9 13h6M9 17h6M9 9h2"/></>,
   settings: <><circle cx="12" cy="12" r="3"/><path d="M19.4 13a1.7 1.7 0 0 0 .3 1.9l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.9-.3 1.7 1.7 0 0 0-1 1.5V19a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1-1.6 1.7 1.7 0 0 0-1.9.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.9 1.7 1.7 0 0 0-1.5-1H4a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1 1.7 1.7 0 0 0-.3-1.9l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.9.3H10a1.7 1.7 0 0 0 1-1.5V4a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.9-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.9V10a1.7 1.7 0 0 0 1.5 1H20a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></>,
+  notes: <><path d="M5 3h11l4 4v14H5z"/><path d="M16 3v4h4"/><path d="M9 12h6M9 16h6"/></>,
 };
 
 function NavItem({ to, module, label, iconKey }) {
@@ -61,7 +62,7 @@ export default function AppLayout() {
           <NavItem to="/office-expenses" module="office_expenses" label="Office Expenses" iconKey="officeExpenses" />
           <NavItem to="/demolition" module="demolition" label="Demolition" iconKey="demolition" />
           <NavItem to="/reports" module="reports" label="Reports" iconKey="reports" />
-
+          <NavItem to="/notes" module="notes" label="Notes" iconKey="notes" />
           <div className="text-[11px] uppercase tracking-[0.06em] text-[#5f6470] px-2.5 pt-3.5 pb-1.5">System</div>
           {isSuperOrAdmin && (
             <>

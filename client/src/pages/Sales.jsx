@@ -1,7 +1,13 @@
 /* ==========================================================================
-   Sales.jsx — sales register with live weight/rate maths, BS↔AD date sync,
-   an optional "Payment (optional)" block on create, an EditPaymentBlock on
-   edit, and an A4 print invoice.
+   Sales.jsx — sales register with VAT (13%) block, live weight/rate maths,
+   BS↔AD date sync, optional "Payment (optional)" on create, EditPaymentBlock
+   on edit, and an A4 print invoice.
+
+   Money math (client-side preview only — server recomputes and overwrites):
+     base    = gross_qty × rate                  (dust included)
+     report  = dust_qty  × rate                  (dust value)
+     vat     = vat_enabled ? base × 0.13 : 0     (13%)
+     final   = base + vat − report               (stored as sales.total)
    ========================================================================== */
 import { useEffect, useMemo, useState } from "react";
 import { api } from "../api/client";
@@ -29,6 +35,8 @@ const EMPTY_FORM = {
   gross_qty: "",
   dust_qty: "0",
   rate: "",
+
+  vat_enabled: false,
 
   amount_received: "0",
   payment_method: "Cash",
@@ -92,17 +100,21 @@ export default function Sales() {
   }
   useEffect(() => { load(); }, []);
 
-  /* ---------- Live computations ---------- */
+  /* ---------- Live computations (preview) ---------- */
   const computed = useMemo(() => {
     const gross = num(form.gross_qty);
     const dust  = num(form.dust_qty);
-    const net   = Math.max(0, gross - dust);
     const rate  = num(form.rate);
-    const total = net * rate;
-    const dustValue = dust * rate;
-    const due = Math.max(0, total - num(form.amount_received));
-    return { gross, dust, net, rate, total, dustValue, due };
-  }, [form.gross_qty, form.dust_qty, form.rate, form.amount_received]);
+
+    const net    = Math.max(0, gross - dust);
+    const total  = gross * rate;                          // base, dust included
+    const report = dust  * rate;                          // dust value
+    const vat    = form.vat_enabled ? total * 0.13 : 0;   // 13%
+    const final  = total + vat - report;                  // final total
+    const due    = Math.max(0, final - num(form.amount_received));
+
+    return { gross, dust, net, rate, total, report, vat, final, due };
+  }, [form.gross_qty, form.dust_qty, form.rate, form.vat_enabled, form.amount_received]);
 
   /* ---------- BS <-> AD live sync ---------- */
   useEffect(() => {
@@ -130,7 +142,6 @@ export default function Sales() {
     return rows.filter((r) => {
       if (statusFilter && r.status !== statusFilter) return false;
 
-       // Payment-status filter
       if (paymentStatusFilter) {
         const total = num(r.total);
         const received = num(r.received_amount || 0);
@@ -148,22 +159,21 @@ export default function Sales() {
         (customerNameById.get(r.customer_id) || "").toLowerCase().includes(q)
       );
     });
-  }, [rows, search, statusFilter, customerFilter, customerNameById]);
+  }, [rows, search, statusFilter, customerFilter, paymentStatusFilter, customerNameById]);
 
   const stats = useMemo(() => {
-  const invoiced = rows.reduce((s, r) => s + num(r.total), 0);
-  const received = rows.reduce((s, r) => s + num(r.received_amount || 0), 0);
-  const due      = rows.reduce((s, r) => s + num(r.due_amount || 0), 0);
-  const qty      = rows.reduce((s, r) => s + num(r.net_qty), 0);
-  const avg      = rows.length ? invoiced / rows.length : 0;
-  const delivered = rows.filter((r) => r.status === "Delivered").length;
-  return [
-    { label: "Total Sales",      value: rupees(invoiced) },
-    { label: "Received",         value: rupees(received) },
-    { label: "Due",              value: rupees(due) },
-    { label: "Delivered",        value: `${delivered} / ${rows.length}` },
-  ];
-}, [rows]);
+    const invoiced = rows.reduce((s, r) => s + num(r.total), 0);
+    const received = rows.reduce((s, r) => s + num(r.received_amount || 0), 0);
+    const due      = rows.reduce((s, r) => s + num(r.due_amount || 0), 0);
+    const qty      = rows.reduce((s, r) => s + num(r.net_qty), 0);
+    const delivered = rows.filter((r) => r.status === "Delivered").length;
+    return [
+      { label: "Total Sales",      value: rupees(invoiced) },
+      { label: "Received",         value: rupees(received) },
+      { label: "Due",              value: rupees(due) },
+      { label: "Delivered",        value: `${delivered} / ${rows.length}` },
+    ];
+  }, [rows]);
 
   /* ---------- Form actions ---------- */
   function openCreate() {
@@ -192,6 +202,8 @@ export default function Sales() {
       gross_qty: row.gross_qty ?? "",
       dust_qty:  row.dust_qty  ?? "0",
       rate:      row.rate      ?? "",
+
+      vat_enabled: Boolean(row.vat_enabled),
 
       amount_received: "0",
       payment_method: "Cash",
@@ -226,7 +238,13 @@ export default function Sales() {
         dust_qty:  computed.dust,
         net_qty:   computed.net,
         rate:      computed.rate,
-        total:     computed.total,
+
+        // Server recomputes total/vat_amount/report_amount from these, but
+        // we send them for consistency if the server ever trusts the client.
+        total:         computed.final,
+        vat_enabled:   form.vat_enabled,
+        vat_amount:    computed.vat,
+        report_amount: computed.report,
 
         status:  form.status,
         company: form.company.trim() || undefined,
@@ -240,11 +258,11 @@ export default function Sales() {
         payload.signature       = form.signature.trim()   || undefined;
       }
 
-      if (!payload.invoice)      { setFormError("Invoice is required.");             return; }
-      if (!payload.customer_id)  { setFormError("Select a customer.");               return; }
-      if (!payload.product)      { setFormError("Product is required.");             return; }
-      if (payload.gross_qty <= 0){ setFormError("Gross quantity must be positive."); return; }
-      if (payload.rate <= 0)     { setFormError("Rate must be positive.");           return; }
+      if (!payload.invoice)      { setFormError("Invoice is required.");             setSaving(false); return; }
+      if (!payload.customer_id)  { setFormError("Select a customer.");               setSaving(false); return; }
+      if (!payload.product)      { setFormError("Product is required.");             setSaving(false); return; }
+      if (payload.gross_qty <= 0){ setFormError("Gross quantity must be positive."); setSaving(false); return; }
+      if (payload.rate <= 0)     { setFormError("Rate must be positive.");           setSaving(false); return; }
 
       if (editing) await api.patch(`/api/sales/${editing.id}`, payload);
       else         await api.post(`/api/sales`, payload);
@@ -289,18 +307,18 @@ export default function Sales() {
     const payments = await fetchPaymentsForSale(row.id);
     const receivedTotal = payments.reduce((s, p) => s + num(p.amount), 0);
     const due = Math.max(0, num(row.total) - receivedTotal);
-    const dustValue = num(row.dust_qty) * num(row.rate);
     const company = row.company || "ASN Demolition Pvt.Ltd";
 
-    // Look up the customer's contact info for the "Sold To" box.
+    // Invoice math reproduced from stored values.
+    const base   = num(row.gross_qty) * num(row.rate);
+    const report = num(row.report_amount) || (num(row.dust_qty) * num(row.rate));
+    const vat    = num(row.vat_amount);
+
     const cust = customers.find((c) => c.id === row.customer_id);
     const custSub = cust
       ? [cust.contact, cust.phone].filter((v) => v && v !== "-" && v !== "Various").join(" · ")
       : "";
 
-    // Delivery block — pull from the linked transportation row if there is one.
-    // The Sales API doesn't return the transport inline, so best-effort: check
-    // the transportation list via the API.
     let transport = null;
     try {
       const { items } = await api.get("/api/transportation");
@@ -355,8 +373,7 @@ export default function Sales() {
               <th class="num">Dust</th>
               <th class="num">Net Qty</th>
               <th class="num">Rate / kg</th>
-              <th class="num">Report Amount</th>
-              <th class="num">Amount</th>
+              <th class="num">Gross × Rate</th>
             </tr>
           </thead>
           <tbody>
@@ -366,8 +383,7 @@ export default function Sales() {
               <td class="num">${esc(kg(row.dust_qty))}</td>
               <td class="num">${esc(kg(row.net_qty))}</td>
               <td class="num">${esc(rupees(row.rate))}</td>
-              <td class="num">${esc(rupees(dustValue))}</td>
-              <td class="num">${esc(rupees(row.total))}</td>
+              <td class="num">${esc(rupees(base))}</td>
             </tr>
           </tbody>
         </table>
@@ -400,7 +416,10 @@ export default function Sales() {
           </table>` : ""}
 
         <div class="doc-summary">
-          <div><span>Total Amount</span><span>${esc(rupees(row.total))}</span></div>
+          <div><span>Total (Gross × Rate)</span><span>${esc(rupees(base))}</span></div>
+          ${row.vat_enabled ? `<div><span>VAT (13%)</span><span>${esc(rupees(vat))}</span></div>` : ""}
+          <div><span>Report amount (Dust × Rate)</span><span>${esc(rupees(report))}</span></div>
+          <div class="doc-summary-strong"><span>Final Total</span><span>${esc(rupees(row.total))}</span></div>
           <div><span>Received</span><span>${esc(rupees(receivedTotal))}</span></div>
           <div class="doc-summary-strong"><span>Balance Due</span><span>${esc(rupees(due))}</span></div>
         </div>
@@ -430,7 +449,11 @@ export default function Sales() {
     { key: "dust_qty",  label: "Dust",  numeric: true, render: (r) => kg(r.dust_qty) },
     { key: "net_qty",   label: "Net",   numeric: true, render: (r) => kg(r.net_qty) },
     { key: "rate",      label: "Rate",  numeric: true, render: (r) => `${rupees(r.rate)}/kg` },
-    { key: "total",     label: "Total", numeric: true, render: (r) => rupees(r.total) },
+    { key: "vat",       label: "VAT",
+      render: (r) => r.vat_enabled
+        ? <Badge variant="warning">13%</Badge>
+        : <span className="text-ink-faint text-[12px]">—</span> },
+    { key: "total",     label: "Final Total", numeric: true, render: (r) => rupees(r.total) },
     { key: "received_amount", label: "Received", numeric: true,
       render: (r) => (
         <span className="text-positive">{rupees(r.received_amount || 0)}</span>
@@ -487,14 +510,14 @@ export default function Sales() {
         <label htmlFor="sale-search" className="text-xs text-ink-faint pl-1">Search</label>
         <input id="sale-search" value={search} onChange={(e) => setSearch(e.target.value)}
           placeholder="Invoice, product, customer" className={inputCls + " !w-64"} />
-      
+
         <label htmlFor="sale-customer" className="text-xs text-ink-faint pl-1">Customer</label>
         <select id="sale-customer" value={customerFilter} onChange={(e) => setCustomerFilter(e.target.value)}
           className={selectCls + " !w-auto"}>
           <option value="">All customers</option>
           {customers.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
         </select>
-            
+
         <label htmlFor="sale-status" className="text-xs text-ink-faint pl-1">Status</label>
         <select id="sale-status" value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)}
           className={selectCls + " !w-auto"}>
@@ -502,7 +525,7 @@ export default function Sales() {
           <option value="Delivered">Delivered</option>
           <option value="Pending">Pending</option>
         </select>
-            
+
         <label htmlFor="sale-payment" className="text-xs text-ink-faint pl-1">Payment</label>
         <select id="sale-payment" value={paymentStatusFilter} onChange={(e) => setPaymentStatusFilter(e.target.value)}
           className={selectCls + " !w-auto"}>
@@ -511,7 +534,7 @@ export default function Sales() {
           <option value="partial">Partially Paid</option>
           <option value="unpaid">Unpaid</option>
         </select>
-            
+
         <span className="ml-auto text-[12.5px] text-ink-soft pr-1">
           Showing <strong className="text-ink font-semibold">{filtered.length}</strong>
         </span>
@@ -538,7 +561,7 @@ export default function Sales() {
         />
       )}
 
-      {/* Detail modal — with Print action */}
+      {/* Detail modal */}
       {detail && (
         <Modal
           title={`Sale Detail — ${detail.invoice}`}
@@ -561,7 +584,15 @@ export default function Sales() {
             <DetailPair label="Gross / Dust / Net"
               value={`${kg(detail.gross_qty)} / ${kg(detail.dust_qty)} / ${kg(detail.net_qty)}`} />
             <DetailPair label="Rate" value={`${rupees(detail.rate)}/kg`} />
-            <DetailPair label="Total (product)" value={rupees(detail.total)} />
+            <DetailPair label="Gross × Rate"
+              value={rupees(num(detail.gross_qty) * num(detail.rate))} />
+            <DetailPair label="VAT (13%)"
+              value={detail.vat_enabled
+                ? <span className="text-warning">{rupees(detail.vat_amount)}</span>
+                : <span className="text-ink-faint">Not applied</span>} />
+            <DetailPair label="Report (Dust × Rate)"
+              value={rupees(detail.report_amount || 0)} />
+            <DetailPair label="Final Total" value={rupees(detail.total)} />
             <DetailPair label="Received So Far"
               value={<span className="text-positive">{rupees(detail.received_amount || 0)}</span>} />
             <DetailPair label="Balance Due"
@@ -655,25 +686,52 @@ export default function Sales() {
                 <input type="number" min="0" step="0.001" className={inputCls} value={form.dust_qty}
                   onChange={(e) => setForm((f) => ({ ...f, dust_qty: e.target.value }))} />
               </Field>
-
               <Field label="Net Qty (computed)">
                 <div className={inputCls + " !bg-steel-tint !text-steel-dark font-semibold"}>
                   {kg(computed.net)}
                 </div>
               </Field>
-              <Field label="Dust Value (dust × rate)">
-                <div className={inputCls + " !bg-warning-tint !text-warning font-semibold"}>
-                  {rupees(computed.dustValue)}
-                </div>
-              </Field>
-
               <Field label="Rate (Rs/kg)">
                 <input type="number" min="0" step="0.01" className={inputCls} value={form.rate} required
                   onChange={(e) => setForm((f) => ({ ...f, rate: e.target.value }))} />
               </Field>
-              <Field label="Total (real product amount)">
-                <div className={inputCls + " !bg-steel-tint !text-steel-dark font-semibold !text-[15px]"}>
+            </div>
+
+            {/* ---- VAT block ---- */}
+            <div className="grid grid-cols-2 gap-3.5 mb-5 max-[560px]:grid-cols-1">
+              <Field label="Add 13% VAT on this sale" span={2}>
+                <label className="flex items-center gap-2.5 text-[13.5px] cursor-pointer select-none py-1">
+                  <input
+                    type="checkbox"
+                    checked={form.vat_enabled}
+                    onChange={(e) => setForm((f) => ({ ...f, vat_enabled: e.target.checked }))}
+                    className="w-[16px] h-[16px] cursor-pointer"
+                  />
+                  <span className={form.vat_enabled ? "text-ink font-medium" : "text-ink-faint"}>
+                    {form.vat_enabled ? "VAT will be added on this sale" : "No VAT on this sale"}
+                  </span>
+                </label>
+              </Field>
+
+              <Field label="Total (Gross × Rate, dust included)">
+                <div className={inputCls + " !bg-surface-sunken font-semibold"}>
                   {rupees(computed.total)}
+                </div>
+              </Field>
+              <Field label="VAT (13%)">
+                <div className={inputCls + " !bg-surface-sunken font-semibold" + (form.vat_enabled ? "" : " !text-ink-faint")}>
+                  {form.vat_enabled ? rupees(computed.vat) : "—"}
+                </div>
+              </Field>
+
+              <Field label="Report amount (Dust × Rate)">
+                <div className={inputCls + " !bg-warning-tint !text-warning font-semibold"}>
+                  {rupees(computed.report)}
+                </div>
+              </Field>
+              <Field label="Final Total (Total + VAT − Report amount)">
+                <div className={inputCls + " !bg-positive-tint !text-positive font-semibold !text-[15px]"}>
+                  {rupees(computed.final)}
                 </div>
               </Field>
 
@@ -698,7 +756,7 @@ export default function Sales() {
                 </h4>
                 <p className="text-[11.5px] text-ink-faint bg-surface-sunken rounded-sm px-3 py-2 mb-4">
                   If the customer pays something right away, enter it here — it's logged as a transaction automatically.
-                  Leave at 0 if nothing is received yet; the rest can be collected anytime from the Transactions page.
+                  Leave at 0 if nothing is received yet.
                 </p>
 
                 <div className="grid grid-cols-2 gap-3.5 mb-3.5 max-[560px]:grid-cols-1">
@@ -764,9 +822,7 @@ export default function Sales() {
   );
 }
 
-/* -------------------------------------------------------------------------
-   DetailPair — small read-only label/value used by the detail modal.
-   ------------------------------------------------------------------------- */
+/* ------------------------------------------------------------------------- */
 function DetailPair({ label, value }) {
   return (
     <div>
@@ -777,8 +833,8 @@ function DetailPair({ label, value }) {
 }
 
 /* -------------------------------------------------------------------------
-   EditPaymentBlock — payments sub-panel shown inside the Edit Sale modal
-   (outside the sale form). Logs additional sale payments against the sale.
+   EditPaymentBlock — payments sub-panel shown inside the Edit Sale modal.
+   Unchanged from the previous version.
    ------------------------------------------------------------------------- */
 function EditPaymentBlock({ sale, customerName, onPaid }) {
   const [open, setOpen] = useState(false);
@@ -873,7 +929,7 @@ function EditPaymentBlock({ sale, customerName, onPaid }) {
 
       <div className="grid grid-cols-3 gap-3 mb-4 max-[560px]:grid-cols-1">
         <div className="bg-surface-sunken border border-line-soft rounded-sm px-3 py-2">
-          <div className="text-[11px] text-ink-faint mb-1">Total</div>
+          <div className="text-[11px] text-ink-faint mb-1">Final Total</div>
           <div className="text-sm font-semibold tabular-nums">{rupees(total)}</div>
         </div>
         <div className="bg-surface-sunken border border-line-soft rounded-sm px-3 py-2">

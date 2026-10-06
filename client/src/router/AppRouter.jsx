@@ -16,6 +16,7 @@ import Reports from "../pages/Reports";
 import Settings from "../pages/Settings";
 import Users from "../pages/Users";
 import Teams from "../pages/Teams";
+import Notes from "../pages/Notes";
 
 export default function AppRouter() {
   return (
@@ -47,7 +48,7 @@ export default function AppRouter() {
         <Route path="/office-expenses"element={<RequirePermission module="office_expenses"><OfficeExpenses /></RequirePermission>} />
         <Route path="/demolition"     element={<RequirePermission module="demolition"><Demolition /></RequirePermission>} />
         <Route path="/reports"        element={<RequirePermission module="reports"><Reports /></RequirePermission>} />
-
+        <Route path="/notes"          element={<RequirePermission module="notes"><Notes /></RequirePermission>} />
         {/* Users: ADMIN (own team, USER/ACCOUNTANT only) or SUPER_ADMIN */}
         <Route path="/users" element={<RequirePermission module="users"><Users /></RequirePermission>} />
         <Route path="/teams" element={<RequirePermission module="teams"><Teams /></RequirePermission>} />

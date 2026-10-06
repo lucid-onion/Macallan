@@ -46,6 +46,10 @@ const schema = z.object({
 
   status:              z.enum(["Delivered", "Pending"]).optional(),
   company:             z.string().max(120).optional(),
+  // VAT (13%) — server recomputes the totals; these are just for record-keeping
+  vat_enabled:         z.boolean().optional(),
+  vat_amount:          z.number().min(0).optional(),
+  report_amount:       z.number().min(0).optional(),
 });
 
 /**
@@ -92,6 +96,29 @@ router.get("/:id", requirePermission("sales", "view"), async (req, res, next) =>
 router.post("/", requirePermission("sales", "create"), async (req, res, next) => {
   try {
     const input = schema.parse(req.body);
+    // ----- Server-side total recompute -----
+    // Never trust the client for money. We recompute from the raw weights/rate
+    // and the VAT toggle, and overwrite whatever the client sent.
+    //
+    //   base    = gross_qty × rate                  (dust included)
+    //   report  = dust_qty  × rate                  (dust value)
+    //   vat     = vat_enabled ? base × 0.13 : 0     (13%)
+    //   total   = base + vat − report               (Final Total)
+    {
+      const gross  = Number(input.gross_qty) || 0;
+      const dust   = Number(input.dust_qty)  || 0;
+      const rate   = Number(input.rate)      || 0;
+      const base   = gross * rate;
+      const report = dust  * rate;
+      const vat    = input.vat_enabled ? base * 0.13 : 0;
+
+      const round2 = (n) => Math.round(n * 100) / 100;
+
+      input.total         = round2(base + vat - report);
+      input.vat_amount    = round2(vat);
+      input.report_amount = round2(report);
+      input.net_qty       = round2(Math.max(0, gross - dust));
+    }
 
     const dup = await query(
       `SELECT 1 FROM sales WHERE invoice = $1 AND deleted_at IS NULL`,
@@ -175,6 +202,39 @@ router.post("/", requirePermission("sales", "create"), async (req, res, next) =>
 router.patch("/:id", requirePermission("sales", "update"), async (req, res, next) => {
   try {
     const input = schema.partial().parse(req.body);
+    // If the caller touched anything that affects money, recompute from the
+    // merged view (patch fields + existing row). Otherwise leave the row alone.
+    if (
+      input.gross_qty    !== undefined ||
+      input.dust_qty     !== undefined ||
+      input.rate         !== undefined ||
+      input.vat_enabled  !== undefined
+    ) {
+      const cur = await query(
+        `SELECT gross_qty, dust_qty, rate, vat_enabled
+           FROM sales WHERE id = $1 AND deleted_at IS NULL`,
+        [req.params.id]
+      );
+      if (!cur.rowCount) throw notFound();
+
+      const gross  = Number(input.gross_qty   ?? cur.rows[0].gross_qty)   || 0;
+      const dust   = Number(input.dust_qty    ?? cur.rows[0].dust_qty)    || 0;
+      const rate   = Number(input.rate        ?? cur.rows[0].rate)        || 0;
+      const vatOn  = input.vat_enabled !== undefined
+        ? input.vat_enabled
+        : cur.rows[0].vat_enabled;
+
+      const base   = gross * rate;
+      const report = dust  * rate;
+      const vat    = vatOn ? base * 0.13 : 0;
+
+      const round2 = (n) => Math.round(n * 100) / 100;
+
+      input.total         = round2(base + vat - report);
+      input.vat_amount    = round2(vat);
+      input.report_amount = round2(report);
+      input.net_qty       = round2(Math.max(0, gross - dust));
+    }
     // Don't try to update payment-only fields on the sales row.
     delete input.amount_received;
     delete input.payment_method;

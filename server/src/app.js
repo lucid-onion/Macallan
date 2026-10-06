@@ -26,7 +26,7 @@ import officeExpRoutes from "./modules/business/office_expenses.js";
 import demolitionRoutes from "./modules/business/demolition.js";
 import reportsRoutes from "./modules/business/reports.js";
 import companiesRoutes from "./modules/business/companies.js";
-
+import notesRoutes from "./modules/business/notes.js";
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 export function createApp() {
@@ -68,7 +68,7 @@ export function createApp() {
   app.use("/api/office-expenses", officeExpRoutes);
   app.use("/api/demolition", demolitionRoutes);
   app.use("/api/reports", reportsRoutes);
-
+  app.use("/api/notes", notesRoutes);
   // ---- Serve the built React frontend (client/dist) ----
   // Any non-/api request falls through to the SPA entry point, so React
   // Router handles the client-side routes (/dashboard, /sales, etc.).
