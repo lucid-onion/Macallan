@@ -1,5 +1,5 @@
 -- ============================================================================
--- 008 — Notes: shared team reminders.
+-- 006 — Notes: shared team reminders.
 --       Anyone can view. Only ADMIN / SUPER_ADMIN can create, delete, or
 --       toggle the done flag.
 -- ============================================================================

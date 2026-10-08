@@ -1,13 +1,15 @@
 /* ==========================================================================
-   Sales.jsx — sales register with VAT (13%) block, live weight/rate maths,
-   BS↔AD date sync, optional "Payment (optional)" on create, EditPaymentBlock
-   on edit, and an A4 print invoice.
+   Sales.jsx — sales register with installments.
 
-   Money math (client-side preview only — server recomputes and overwrites):
-     base    = gross_qty × rate                  (dust included)
-     report  = dust_qty  × rate                  (dust value)
-     vat     = vat_enabled ? base × 0.13 : 0     (13%)
-     final   = base + vat − report               (stored as sales.total)
+   Money model:
+     Total         = quantity × rate
+     Report Amount = manual deduction (user-entered)
+     Final Total   = Total − Report Amount  → stored in sales.total
+
+   Payments received:
+     Advance on create → one transaction
+     Additional installments → transactions via POST /api/sales/:id/payments
+     Auto-labeled: "First installment (Advance)", "Second installment", …
    ========================================================================== */
 import { useEffect, useMemo, useState } from "react";
 import { api } from "../api/client";
@@ -18,8 +20,12 @@ import {
 } from "../components/ui";
 import DataTable from "../components/DataTable";
 import { printVoucher } from "../lib/printVoucher";
-import { bsToday, bsToAdString, adToBs, formatBs } from "../lib/nepali-date";
+import {
+  bsToday, bsToAdString, adToBs, formatBs,
+  NEPALI_MONTHS, NEPALI_MONTHS_EN,
+} from "../lib/nepali-date";
 
+const BRAND = "ScrapLink Pvt.Ltd";
 const todayBs = bsToday();
 
 const EMPTY_FORM = {
@@ -35,8 +41,7 @@ const EMPTY_FORM = {
   gross_qty: "",
   dust_qty: "0",
   rate: "",
-
-  vat_enabled: false,
+  report_amount: "0",
 
   amount_received: "0",
   payment_method: "Cash",
@@ -45,8 +50,14 @@ const EMPTY_FORM = {
   signature: "",
 
   status: "Delivered",
-  company: "ASN Demolition Pvt.Ltd",
+  company: BRAND,
 };
+
+const ORDINALS = [
+  "", "First", "Second", "Third", "Fourth", "Fifth", "Sixth",
+  "Seventh", "Eighth", "Ninth", "Tenth", "Eleventh", "Twelfth",
+];
+const ordinal = (n) => ORDINALS[n] || `#${n}`;
 
 const num = (v) => { const n = Number(v); return isFinite(n) ? n : 0; };
 const rupees = (v) => `Rs. ${num(v).toLocaleString("en-IN", { maximumFractionDigits: 2 })}`;
@@ -55,6 +66,41 @@ const adStr = (r) => (r.date_ad ? String(r.date_ad).slice(0, 10) : "—");
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) =>
   ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c])
 );
+
+const AD_MONTHS = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+function prettyAd(s) {
+  if (!s) return "—";
+  const [y, m, d] = String(s).slice(0, 10).split("-").map(Number);
+  if (!y || !m || !d) return s;
+  return `${d} ${AD_MONTHS[m - 1]} ${y}`;
+}
+
+const BS_MONTH_LENGTHS = {
+  2070:[31,31,31,32,31,31,29,30,30,29,30,30],
+  2071:[31,31,32,31,31,31,30,29,30,29,30,30],
+  2072:[31,32,31,32,31,30,30,29,30,29,30,30],
+  2073:[31,32,31,32,31,30,30,30,29,29,30,31],
+  2074:[31,31,31,32,31,31,30,29,30,29,30,30],
+  2075:[31,31,32,31,31,31,30,29,30,29,30,30],
+  2076:[31,32,31,32,31,30,30,30,29,29,30,30],
+  2077:[31,32,31,32,31,30,30,30,29,30,29,31],
+  2078:[31,31,31,32,31,31,30,29,30,29,30,30],
+  2079:[31,31,32,31,31,31,30,29,30,29,30,30],
+  2080:[31,32,31,32,31,30,30,30,29,29,30,30],
+  2081:[31,32,31,32,31,30,30,30,29,30,29,31],
+  2082:[31,31,32,31,31,31,30,29,30,29,30,30],
+  2083:[31,31,32,31,31,31,30,29,30,29,30,30],
+  2084:[31,32,31,32,31,30,30,30,29,29,30,31],
+  2085:[30,32,31,32,31,30,30,30,29,30,29,31],
+  2086:[31,31,32,31,31,31,30,29,30,29,30,30],
+  2087:[31,31,32,31,31,31,30,30,29,30,30,30],
+  2088:[30,31,32,32,30,31,30,30,29,30,30,30],
+  2089:[30,32,31,32,31,30,30,30,29,30,30,30],
+};
+function daysInBsMonth(year, month) {
+  const lengths = BS_MONTH_LENGTHS[year] || BS_MONTH_LENGTHS[2083];
+  return lengths[month - 1] || 30;
+}
 
 export default function Sales() {
   const { has, canDelete } = useAuth();
@@ -70,7 +116,7 @@ export default function Sales() {
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState("");
   const [customerFilter, setCustomerFilter] = useState("");
-  const [paymentStatusFilter, setPaymentStatusFilter] = useState(""); // "", "paid", "partial", "unpaid"
+  const [paymentStatusFilter, setPaymentStatusFilter] = useState("");
 
   const [showForm, setShowForm] = useState(false);
   const [editing, setEditing] = useState(null);
@@ -100,23 +146,18 @@ export default function Sales() {
   }
   useEffect(() => { load(); }, []);
 
-  /* ---------- Live computations (preview) ---------- */
+  /* ---------- Live computed ---------- */
   const computed = useMemo(() => {
-    const gross = num(form.gross_qty);
-    const dust  = num(form.dust_qty);
-    const rate  = num(form.rate);
-
-    const net    = Math.max(0, gross - dust);
-    const total  = gross * rate;                          // base, dust included
-    const report = dust  * rate;                          // dust value
-    const vat    = form.vat_enabled ? total * 0.13 : 0;   // 13%
-    const final  = total + vat - report;                  // final total
+    const qty    = num(form.gross_qty);
+    const rate   = num(form.rate);
+    const total  = qty * rate;
+    const report = num(form.report_amount);
+    const final  = Math.max(0, total - report);
     const due    = Math.max(0, final - num(form.amount_received));
+    return { qty, rate, total, report, final, due };
+  }, [form.gross_qty, form.rate, form.report_amount, form.amount_received]);
 
-    return { gross, dust, net, rate, total, report, vat, final, due };
-  }, [form.gross_qty, form.dust_qty, form.rate, form.vat_enabled, form.amount_received]);
-
-  /* ---------- BS <-> AD live sync ---------- */
+  /* ---------- BS ↔ AD sync ---------- */
   useEffect(() => {
     if (!showForm) return;
     const y = Number(form.date_bs_year);
@@ -126,11 +167,11 @@ export default function Sales() {
     try {
       const s = bsToAdString({ year: y, month: m, day: d });
       if (s !== form.date_ad) setForm((f) => ({ ...f, date_ad: s }));
-    } catch { /* invalid combination */ }
+    } catch { /* invalid */ }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [form.date_bs_year, form.date_bs_month, form.date_bs_day, showForm]);
 
-  /* ---------- Filters ---------- */
+  /* ---------- Lookups ---------- */
   const customerNameById = useMemo(() => {
     const m = new Map();
     customers.forEach((c) => m.set(c.id, c.name));
@@ -165,7 +206,6 @@ export default function Sales() {
     const invoiced = rows.reduce((s, r) => s + num(r.total), 0);
     const received = rows.reduce((s, r) => s + num(r.received_amount || 0), 0);
     const due      = rows.reduce((s, r) => s + num(r.due_amount || 0), 0);
-    const qty      = rows.reduce((s, r) => s + num(r.net_qty), 0);
     const delivered = rows.filter((r) => r.status === "Delivered").length;
     return [
       { label: "Total Sales",      value: rupees(invoiced) },
@@ -175,7 +215,7 @@ export default function Sales() {
     ];
   }, [rows]);
 
-  /* ---------- Form actions ---------- */
+  /* ---------- Form open/close ---------- */
   function openCreate() {
     setEditing(null);
     setForm({
@@ -202,8 +242,7 @@ export default function Sales() {
       gross_qty: row.gross_qty ?? "",
       dust_qty:  row.dust_qty  ?? "0",
       rate:      row.rate      ?? "",
-
-      vat_enabled: Boolean(row.vat_enabled),
+      report_amount: row.report_amount ?? "0",
 
       amount_received: "0",
       payment_method: "Cash",
@@ -212,12 +251,13 @@ export default function Sales() {
       signature:   row.signature   || "",
 
       status:  row.status  || "Delivered",
-      company: row.company || "ASN Demolition Pvt.Ltd",
+      company: row.company || BRAND,
     });
     setFormError(null);
     setShowForm(true);
   }
 
+  /* ---------- Save ---------- */
   async function save(e) {
     e.preventDefault();
     setSaving(true);
@@ -234,17 +274,12 @@ export default function Sales() {
         date_bs_day:   Number(form.date_bs_day),
         date_ad:       form.date_ad,
 
-        gross_qty: computed.gross,
-        dust_qty:  computed.dust,
-        net_qty:   computed.net,
+        gross_qty: computed.qty,
+        dust_qty:  num(form.dust_qty),
+        net_qty:   computed.qty,
         rate:      computed.rate,
-
-        // Server recomputes total/vat_amount/report_amount from these, but
-        // we send them for consistency if the server ever trusts the client.
-        total:         computed.final,
-        vat_enabled:   form.vat_enabled,
-        vat_amount:    computed.vat,
         report_amount: computed.report,
+        total:     computed.final,
 
         status:  form.status,
         company: form.company.trim() || undefined,
@@ -261,11 +296,11 @@ export default function Sales() {
       if (!payload.invoice)      { setFormError("Invoice is required.");             setSaving(false); return; }
       if (!payload.customer_id)  { setFormError("Select a customer.");               setSaving(false); return; }
       if (!payload.product)      { setFormError("Product is required.");             setSaving(false); return; }
-      if (payload.gross_qty <= 0){ setFormError("Gross quantity must be positive."); setSaving(false); return; }
+      if (payload.gross_qty <= 0){ setFormError("Quantity must be positive.");       setSaving(false); return; }
       if (payload.rate <= 0)     { setFormError("Rate must be positive.");           setSaving(false); return; }
 
       if (editing) await api.patch(`/api/sales/${editing.id}`, payload);
-      else         await api.post(`/api/sales`, payload);
+      else         await api.post("/api/sales", payload);
 
       setShowForm(false);
       await load();
@@ -291,49 +326,29 @@ export default function Sales() {
   }
 
   /* ---------- Print ---------- */
-  async function fetchPaymentsForSale(id) {
-    try {
-      const { items } = await api.get("/api/transactions");
-      return (items || []).filter(
-        (t) => t.ref_type === "sale" && Number(t.ref_id) === Number(id)
-      );
-    } catch {
-      return [];
-    }
-  }
-
   async function printSaleInvoice(row) {
     const customerName = customerNameById.get(row.customer_id) || "—";
-    const payments = await fetchPaymentsForSale(row.id);
-    const receivedTotal = payments.reduce((s, p) => s + num(p.amount), 0);
-    const due = Math.max(0, num(row.total) - receivedTotal);
-    const company = row.company || "ASN Demolition Pvt.Ltd";
+    const company = row.company || BRAND;
 
-    // Invoice math reproduced from stored values.
-    const base   = num(row.gross_qty) * num(row.rate);
-    const report = num(row.report_amount) || (num(row.dust_qty) * num(row.rate));
-    const vat    = num(row.vat_amount);
+    let payments = [];
+    try {
+      const { items } = await api.get(`/api/sales/${row.id}/payments`);
+      payments = items || [];
+    } catch { payments = []; }
+
+    const paidTotal = payments.reduce((s, p) => s + num(p.amount), 0);
+    const due = Math.max(0, num(row.total) - paidTotal);
+
+    const installmentLines = payments.map((p, i) => `
+      <div><span>${esc(p.note || `${ordinal(i + 1)} installment`)}</span><span>${esc(rupees(p.amount))}</span></div>
+    `).join("");
 
     const cust = customers.find((c) => c.id === row.customer_id);
     const custSub = cust
       ? [cust.contact, cust.phone].filter((v) => v && v !== "-" && v !== "Various").join(" · ")
       : "";
 
-    let transport = null;
-    try {
-      const { items } = await api.get("/api/transportation");
-      transport = (items || []).find((t) => Number(t.sale_id) === Number(row.id)) || null;
-    } catch { /* no transport, fine */ }
-
-    const paymentRows = payments.map((p) => `
-      <tr>
-        <td>${esc(formatBs(p))}</td>
-        <td>${esc(p.method || "-")}</td>
-        <td>${esc(p.note || "-")}</td>
-        <td class="num">${esc(rupees(p.amount))}</td>
-      </tr>`).join("");
-
-    const html = `
+    printVoucher(`
       <div class="doc-sheet">
         <div class="doc-letterhead">
           <div class="doc-brand">
@@ -369,60 +384,43 @@ export default function Sales() {
           <thead>
             <tr>
               <th>Product</th>
-              <th class="num">Gross Qty</th>
-              <th class="num">Dust</th>
-              <th class="num">Net Qty</th>
+              <th class="num">Quantity</th>
               <th class="num">Rate / kg</th>
-              <th class="num">Gross × Rate</th>
+              <th class="num">Total</th>
+              <th class="num">Report Amt</th>
+              <th class="num">Final Total</th>
             </tr>
           </thead>
           <tbody>
             <tr>
               <td>${esc(row.product || "—")}</td>
               <td class="num">${esc(kg(row.gross_qty))}</td>
-              <td class="num">${esc(kg(row.dust_qty))}</td>
-              <td class="num">${esc(kg(row.net_qty))}</td>
               <td class="num">${esc(rupees(row.rate))}</td>
-              <td class="num">${esc(rupees(base))}</td>
+              <td class="num">${esc(rupees(num(row.gross_qty) * num(row.rate)))}</td>
+              <td class="num">− ${esc(rupees(row.report_amount || 0))}</td>
+              <td class="num">${esc(rupees(row.total))}</td>
             </tr>
           </tbody>
         </table>
 
-        ${transport ? `
-          <div class="doc-section-title">Delivery</div>
-          <div class="doc-fields doc-fields-4">
-            <div><span>From</span><strong>${esc(transport.from_location || "—")}</strong></div>
-            <div><span>To</span><strong>${esc(transport.to_location || "—")}</strong></div>
-            <div><span>Vehicle No.</span><strong>${esc(transport.vehicle || "—")}</strong></div>
-            <div><span>Driver</span><strong>${esc(transport.driver || "—")}</strong></div>
-            <div><span>Driver's Phone</span><strong>${esc(transport.driver_phone || "—")}</strong></div>
-            <div><span>Loader</span><strong>${esc(transport.loader || "—")}</strong></div>
-            <div><span>Transport Fee</span><strong>${esc(rupees(transport.fee || 0))}</strong></div>
-            <div><span>Delivery Status</span><strong>${esc(transport.status || "—")}</strong></div>
-          </div>` : ""}
+        <div class="doc-summary">
+          <div><span>Total (Quantity × Rate)</span><span>${esc(rupees(num(row.gross_qty) * num(row.rate)))}</span></div>
+          <div><span>Report Amount</span><span>− ${esc(rupees(row.report_amount || 0))}</span></div>
+          <div class="doc-summary-strong"><span>Final Total</span><span>${esc(rupees(row.total))}</span></div>
+        </div>
 
         ${payments.length ? `
           <div class="doc-section-title">Payments Received</div>
-          <table class="doc-table">
-            <thead>
-              <tr>
-                <th>Date (BS)</th>
-                <th>Method</th>
-                <th>Note</th>
-                <th class="num">Amount</th>
-              </tr>
-            </thead>
-            <tbody>${paymentRows}</tbody>
-          </table>` : ""}
-
-        <div class="doc-summary">
-          <div><span>Total (Gross × Rate)</span><span>${esc(rupees(base))}</span></div>
-          ${row.vat_enabled ? `<div><span>VAT (13%)</span><span>${esc(rupees(vat))}</span></div>` : ""}
-          <div><span>Report amount (Dust × Rate)</span><span>${esc(rupees(report))}</span></div>
-          <div class="doc-summary-strong"><span>Final Total</span><span>${esc(rupees(row.total))}</span></div>
-          <div><span>Received</span><span>${esc(rupees(receivedTotal))}</span></div>
-          <div class="doc-summary-strong"><span>Balance Due</span><span>${esc(rupees(due))}</span></div>
-        </div>
+          <div class="doc-summary">
+            ${installmentLines}
+            <div class="doc-summary-strong"><span>Total Received</span><span>${esc(rupees(paidTotal))}</span></div>
+            <div class="doc-summary-strong"><span>Balance Due</span><span>${esc(rupees(due))}</span></div>
+          </div>
+        ` : `
+          <div class="doc-summary">
+            <div class="doc-summary-strong"><span>Balance Due</span><span>${esc(rupees(due))}</span></div>
+          </div>
+        `}
 
         <div class="doc-signatures">
           <div>Received By (Customer)</div>
@@ -432,9 +430,7 @@ export default function Sales() {
         <div class="doc-foot">
           Printed on ${esc(new Date().toLocaleString())} from ${esc(company)} management system.
         </div>
-      </div>`;
-
-    printVoucher(html);
+      </div>`);
   }
 
   /* ---------- Table columns ---------- */
@@ -445,15 +441,9 @@ export default function Sales() {
     { key: "customer", label: "Customer",
       render: (r) => customerNameById.get(r.customer_id) || "—" },
     { key: "product", label: "Product" },
-    { key: "gross_qty", label: "Gross", numeric: true, render: (r) => kg(r.gross_qty) },
-    { key: "dust_qty",  label: "Dust",  numeric: true, render: (r) => kg(r.dust_qty) },
-    { key: "net_qty",   label: "Net",   numeric: true, render: (r) => kg(r.net_qty) },
-    { key: "rate",      label: "Rate",  numeric: true, render: (r) => `${rupees(r.rate)}/kg` },
-    { key: "vat",       label: "VAT",
-      render: (r) => r.vat_enabled
-        ? <Badge variant="warning">13%</Badge>
-        : <span className="text-ink-faint text-[12px]">—</span> },
-    { key: "total",     label: "Final Total", numeric: true, render: (r) => rupees(r.total) },
+    { key: "gross_qty", label: "Qty", numeric: true, render: (r) => kg(r.gross_qty) },
+    { key: "rate", label: "Rate", numeric: true, render: (r) => `${rupees(r.rate)}/kg` },
+    { key: "total", label: "Final Total", numeric: true, render: (r) => rupees(r.total) },
     { key: "received_amount", label: "Received", numeric: true,
       render: (r) => (
         <span className="text-positive">{rupees(r.received_amount || 0)}</span>
@@ -474,13 +464,11 @@ export default function Sales() {
     { key: "actions", label: "", render: (r) => (
       <div className="flex gap-1.5 justify-end">
         {canUpdate && (
-          <button type="button"
-            onClick={(e) => { e.stopPropagation(); openEdit(r); }}
+          <button type="button" onClick={(e) => { e.stopPropagation(); openEdit(r); }}
             className="text-steel text-xs hover:underline">Edit</button>
         )}
         {canDel && (
-          <button type="button"
-            onClick={(e) => { e.stopPropagation(); setToDelete(r); }}
+          <button type="button" onClick={(e) => { e.stopPropagation(); setToDelete(r); }}
             className="text-negative text-xs hover:underline">Delete</button>
         )}
       </div>
@@ -495,7 +483,6 @@ export default function Sales() {
         actions={canCreate ? <Button variant="primary" onClick={openCreate}>+ New Sale</Button> : null}
       />
 
-      {/* Stats */}
       <div className="grid grid-cols-4 gap-3 mb-[18px] max-[980px]:grid-cols-2 max-[520px]:grid-cols-1">
         {stats.map((s, i) => (
           <div key={i} className="bg-surface-sunken border border-line-soft rounded-sm px-3.5 py-[13px]">
@@ -505,7 +492,6 @@ export default function Sales() {
         ))}
       </div>
 
-      {/* Filters */}
       <div className="flex items-center gap-2 flex-wrap bg-surface border border-line rounded-md p-2.5 mb-6">
         <label htmlFor="sale-search" className="text-xs text-ink-faint pl-1">Search</label>
         <input id="sale-search" value={search} onChange={(e) => setSearch(e.target.value)}
@@ -581,17 +567,10 @@ export default function Sales() {
             <DetailPair label="Date (EN)" value={adStr(detail)} />
             <DetailPair label="Product" value={detail.product || "—"} />
             <DetailPair label="Status" value={detail.status || "—"} />
-            <DetailPair label="Gross / Dust / Net"
-              value={`${kg(detail.gross_qty)} / ${kg(detail.dust_qty)} / ${kg(detail.net_qty)}`} />
+            <DetailPair label="Quantity" value={kg(detail.gross_qty)} />
             <DetailPair label="Rate" value={`${rupees(detail.rate)}/kg`} />
-            <DetailPair label="Gross × Rate"
-              value={rupees(num(detail.gross_qty) * num(detail.rate))} />
-            <DetailPair label="VAT (13%)"
-              value={detail.vat_enabled
-                ? <span className="text-warning">{rupees(detail.vat_amount)}</span>
-                : <span className="text-ink-faint">Not applied</span>} />
-            <DetailPair label="Report (Dust × Rate)"
-              value={rupees(detail.report_amount || 0)} />
+            <DetailPair label="Total (Qty × Rate)" value={rupees(num(detail.gross_qty) * num(detail.rate))} />
+            <DetailPair label="Report Amount" value={rupees(detail.report_amount || 0)} />
             <DetailPair label="Final Total" value={rupees(detail.total)} />
             <DetailPair label="Received So Far"
               value={<span className="text-positive">{rupees(detail.received_amount || 0)}</span>} />
@@ -614,6 +593,9 @@ export default function Sales() {
           footer={
             <>
               <Button onClick={() => setShowForm(false)} disabled={saving}>Cancel</Button>
+              {!editing && (
+                <Button type="button" disabled={saving}>Save &amp; Add Transport</Button>
+              )}
               <Button variant="primary" type="submit" form="sale-form" disabled={saving}>
                 {saving ? "Saving…" : editing ? "Save Changes" : "Save Sale"}
               </Button>
@@ -627,6 +609,11 @@ export default function Sales() {
               </div>
             )}
 
+            <p className="text-[11.5px] text-ink-faint bg-surface-sunken rounded-sm px-3 py-2 mb-4">
+              Sold quantity is deducted automatically from Inventory if the product name matches an existing item.
+            </p>
+
+            {/* ============ CUSTOMER + PRODUCT ============ */}
             <div className="grid grid-cols-2 gap-3.5 mb-5 max-[560px]:grid-cols-1">
               <Field label="Customer">
                 <select className={selectCls} value={form.customer_id} required
@@ -635,101 +622,71 @@ export default function Sales() {
                   {customers.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
                 </select>
               </Field>
-              <Field label="Invoice #">
-                <input className={inputCls} value={form.invoice} required
-                  onChange={(e) => setForm((f) => ({ ...f, invoice: e.target.value }))} />
-              </Field>
-              <Field label="Product" span={2}>
+              <Field label="Product">
                 <input className={inputCls} value={form.product} required
                   placeholder="e.g. TMT Rod 12mm"
                   onChange={(e) => setForm((f) => ({ ...f, product: e.target.value }))} />
               </Field>
+            </div>
 
-              <Field label="Date (BS Year)">
-                <input type="number" min="2000" max="2200" className={inputCls} value={form.date_bs_year}
-                  onChange={(e) => setForm((f) => ({ ...f, date_bs_year: e.target.value }))} />
-              </Field>
-              <Field label="Date (BS Month 1-12)">
-                <input type="number" min="1" max="12" className={inputCls} value={form.date_bs_month}
-                  onChange={(e) => setForm((f) => ({ ...f, date_bs_month: e.target.value }))} />
-              </Field>
-              <Field label="Date (BS Day)">
-                <input type="number" min="1" max="32" className={inputCls} value={form.date_bs_day}
-                  onChange={(e) => setForm((f) => ({ ...f, date_bs_day: e.target.value }))} />
-              </Field>
-              <Field label="Date (AD)" hint="auto-synced with BS">
-                <input type="date" className={inputCls} value={form.date_ad}
+            {/* ============ DATE + QTY ============ */}
+            <div className="grid grid-cols-2 gap-3.5 mb-5 max-[560px]:grid-cols-1">
+              <Field label="Month (BS)">
+                <select className={selectCls} value={form.date_bs_month}
                   onChange={(e) => {
-                    const ad = e.target.value;
-                    setForm((f) => ({ ...f, date_ad: ad }));
-                    try {
-                      const d = new Date(ad);
-                      if (!isNaN(d)) {
-                        const bs = adToBs(d);
-                        setForm((f) => ({
-                          ...f,
-                          date_bs_year: bs.year,
-                          date_bs_month: bs.month,
-                          date_bs_day: bs.day,
-                          date_ad: ad,
-                        }));
-                      }
-                    } catch { /* ignore */ }
-                  }} />
+                    const m = Number(e.target.value);
+                    setForm((f) => {
+                      const maxDay = daysInBsMonth(Number(f.date_bs_year), m);
+                      return {
+                        ...f,
+                        date_bs_month: m,
+                        date_bs_day: Math.min(Number(f.date_bs_day) || 1, maxDay),
+                      };
+                    });
+                  }}>
+                  {NEPALI_MONTHS.map((np, i) => (
+                    <option key={i} value={i + 1}>
+                      {np} / {NEPALI_MONTHS_EN[i]}
+                    </option>
+                  ))}
+                </select>
+              </Field>
+              <Field label="Day">
+                <select className={selectCls} value={form.date_bs_day}
+                  onChange={(e) => setForm((f) => ({ ...f, date_bs_day: Number(e.target.value) }))}>
+                  {Array.from(
+                    { length: daysInBsMonth(Number(form.date_bs_year), Number(form.date_bs_month)) },
+                    (_, i) => i + 1
+                  ).map((d) => <option key={d} value={d}>{d}</option>)}
+                </select>
               </Field>
 
-              <Field label="Gross Qty (kg)">
+              <Field label="English Date" hint="auto-computed from BS">
+                <div className={inputCls + " !bg-surface-sunken text-ink-soft"}>
+                  {prettyAd(form.date_ad)}
+                </div>
+              </Field>
+              <Field label="Quantity (kg)">
                 <input type="number" min="0" step="0.001" className={inputCls} value={form.gross_qty} required
                   onChange={(e) => setForm((f) => ({ ...f, gross_qty: e.target.value }))} />
               </Field>
-              <Field label="Dust (kg)">
-                <input type="number" min="0" step="0.001" className={inputCls} value={form.dust_qty}
-                  onChange={(e) => setForm((f) => ({ ...f, dust_qty: e.target.value }))} />
-              </Field>
-              <Field label="Net Qty (computed)">
-                <div className={inputCls + " !bg-steel-tint !text-steel-dark font-semibold"}>
-                  {kg(computed.net)}
-                </div>
-              </Field>
-              <Field label="Rate (Rs/kg)">
+
+              <Field label="Rate (Rs / kg)">
                 <input type="number" min="0" step="0.01" className={inputCls} value={form.rate} required
                   onChange={(e) => setForm((f) => ({ ...f, rate: e.target.value }))} />
               </Field>
-            </div>
-
-            {/* ---- VAT block ---- */}
-            <div className="grid grid-cols-2 gap-3.5 mb-5 max-[560px]:grid-cols-1">
-              <Field label="Add 13% VAT on this sale" span={2}>
-                <label className="flex items-center gap-2.5 text-[13.5px] cursor-pointer select-none py-1">
-                  <input
-                    type="checkbox"
-                    checked={form.vat_enabled}
-                    onChange={(e) => setForm((f) => ({ ...f, vat_enabled: e.target.checked }))}
-                    className="w-[16px] h-[16px] cursor-pointer"
-                  />
-                  <span className={form.vat_enabled ? "text-ink font-medium" : "text-ink-faint"}>
-                    {form.vat_enabled ? "VAT will be added on this sale" : "No VAT on this sale"}
-                  </span>
-                </label>
-              </Field>
-
-              <Field label="Total (Gross × Rate, dust included)">
-                <div className={inputCls + " !bg-surface-sunken font-semibold"}>
+              <Field label="Total (Quantity × Rate)">
+                <div className={inputCls + " !bg-steel-tint !text-steel-dark font-semibold"}>
                   {rupees(computed.total)}
                 </div>
               </Field>
-              <Field label="VAT (13%)">
-                <div className={inputCls + " !bg-surface-sunken font-semibold" + (form.vat_enabled ? "" : " !text-ink-faint")}>
-                  {form.vat_enabled ? rupees(computed.vat) : "—"}
-                </div>
+
+              <Field label="Report Amount (Rs)" hint="subtracted from total" span={2}>
+                <input type="number" min="0" step="0.01" className={inputCls} value={form.report_amount}
+                  onChange={(e) => setForm((f) => ({ ...f, report_amount: e.target.value }))} />
               </Field>
 
-              <Field label="Report amount (Dust × Rate)">
-                <div className={inputCls + " !bg-warning-tint !text-warning font-semibold"}>
-                  {rupees(computed.report)}
-                </div>
-              </Field>
-              <Field label="Final Total (Total + VAT − Report amount)">
+              <Field label="Final Total (Total − Report Amount)" span={2}>
                 <div className={inputCls + " !bg-positive-tint !text-positive font-semibold !text-[15px]"}>
                   {rupees(computed.final)}
                 </div>
@@ -743,12 +700,13 @@ export default function Sales() {
                 </select>
               </Field>
               <Field label="Company">
-                <input className={inputCls} value={form.company}
-                  onChange={(e) => setForm((f) => ({ ...f, company: e.target.value }))} />
+                <div className={inputCls + " !bg-surface-sunken text-ink-soft"}>
+                  {BRAND}
+                </div>
               </Field>
             </div>
 
-            {/* ---- Payment (create only) ---- */}
+            {/* ============ PAYMENT (CREATE ONLY) ============ */}
             {!editing && (
               <>
                 <h4 className="text-[13.5px] font-semibold mb-2 pt-4 border-t border-dashed border-line">
@@ -756,11 +714,11 @@ export default function Sales() {
                 </h4>
                 <p className="text-[11.5px] text-ink-faint bg-surface-sunken rounded-sm px-3 py-2 mb-4">
                   If the customer pays something right away, enter it here — it's logged as a transaction automatically.
-                  Leave at 0 if nothing is received yet.
+                  Leave at 0 if nothing is received yet. Additional installments can be logged from the Edit view.
                 </p>
 
                 <div className="grid grid-cols-2 gap-3.5 mb-3.5 max-[560px]:grid-cols-1">
-                  <Field label="Amount Received Now (Rs)">
+                  <Field label="Advance Received Now (Rs)">
                     <input type="number" min="0" step="0.01" className={inputCls} value={form.amount_received}
                       onChange={(e) => setForm((f) => ({ ...f, amount_received: e.target.value }))} />
                   </Field>
@@ -771,35 +729,19 @@ export default function Sales() {
                       <option value="Online">Online</option>
                     </select>
                   </Field>
-                  <Field label="Cash Source">
-                    <input className={inputCls} value={form.cash_source}
-                      onChange={(e) => setForm((f) => ({ ...f, cash_source: e.target.value }))}
-                      placeholder="e.g. Office cash / Bank" />
-                  </Field>
-                  <Field label="Due After This">
+                  <Field label="Due After This" span={2}>
                     <div className={inputCls + " !bg-steel-tint !text-steel-dark font-semibold"}>
                       {rupees(computed.due)}
                     </div>
-                  </Field>
-                  <Field label="Paid By (Signature)">
-                    <input className={inputCls} value={form.received_by}
-                      onChange={(e) => setForm((f) => ({ ...f, received_by: e.target.value }))}
-                      placeholder="Who handled the receipt" />
-                  </Field>
-                  <Field label="Received By (Signature)">
-                    <input className={inputCls} value={form.signature}
-                      onChange={(e) => setForm((f) => ({ ...f, signature: e.target.value }))}
-                      placeholder="Name confirming the slip" />
                   </Field>
                 </div>
               </>
             )}
           </form>
 
-          {/* ---- Payment ledger (EDIT only) ---- */}
           {editing && (
             <div className="mt-5">
-              <EditPaymentBlock
+              <CustomerPaymentsBlock
                 sale={editing}
                 customerName={customerNameById.get(editing.customer_id) || ""}
                 onPaid={load}
@@ -833,10 +775,11 @@ function DetailPair({ label, value }) {
 }
 
 /* -------------------------------------------------------------------------
-   EditPaymentBlock — payments sub-panel shown inside the Edit Sale modal.
-   Unchanged from the previous version.
+   CustomerPaymentsBlock — installments log for one sale.
+   Writes to the transactions ledger with ref_type='sale', direction='in'.
+   Auto-labels: First installment (Advance), Second installment, Third …
    ------------------------------------------------------------------------- */
-function EditPaymentBlock({ sale, customerName, onPaid }) {
+function CustomerPaymentsBlock({ sale, customerName, onPaid }) {
   const [open, setOpen] = useState(false);
   const [amount, setAmount] = useState("");
   const [method, setMethod] = useState("Cash");
@@ -851,12 +794,8 @@ function EditPaymentBlock({ sale, customerName, onPaid }) {
   async function reloadPayments() {
     setLoadingPayments(true);
     try {
-      const { items } = await api.get("/api/transactions");
-      setPayments(
-        (items || []).filter(
-          (t) => t.ref_type === "sale" && Number(t.ref_id) === Number(sale.id)
-        )
-      );
+      const { items } = await api.get(`/api/sales/${sale.id}/payments`);
+      setPayments(items || []);
     } catch {
       setPayments([]);
     } finally {
@@ -865,9 +804,10 @@ function EditPaymentBlock({ sale, customerName, onPaid }) {
   }
   useEffect(() => { reloadPayments(); /* eslint-disable-next-line */ }, [sale.id]);
 
-  const receivedSoFar = payments.reduce((s, p) => s + Number(p.amount || 0), 0);
-  const total = Number(sale.total || 0);
-  const due = Math.max(0, total - receivedSoFar);
+  const total       = Number(sale.total || 0);
+  const paidSoFar   = payments.reduce((s, p) => s + Number(p.amount || 0), 0);
+  const totalDue    = Math.max(0, total - paidSoFar);
+  const nextInstallmentNumber = payments.length + 1;
 
   const bs = {
     year:  sale.date_bs_year  || 2083,
@@ -885,29 +825,19 @@ function EditPaymentBlock({ sale, customerName, onPaid }) {
     if (!amt || amt <= 0) { setErr("Enter an amount greater than zero."); return; }
     setBusy(true);
     try {
-      const payload = {
-        type: "sale_payment",
-        party_type: "customer",
-        party_key: String(sale.customer_id),
-        direction: "in",
+      await api.post(`/api/sales/${sale.id}/payments`, {
         amount: amt,
         method,
-        ref_type: "sale",
-        ref_id: sale.id,
+        note: note.trim() || undefined,
         date_bs_year:  bs.year,
         date_bs_month: bs.month,
         date_bs_day:   bs.day,
         date_ad:       ad,
-        company:       sale.company || undefined,
-        note:          note.trim() || "Additional payment",
-      };
-      if (customerName) payload.party_label = customerName;
-
-      await api.post("/api/transactions", payload);
+      });
 
       setAmount("");
       setNote("");
-      setDone(`Received ${amt.toLocaleString("en-IN")} — logged.`);
+      setDone(`Logged ${amt.toLocaleString("en-IN")} as a new payment.`);
       await reloadPayments();
       if (onPaid) onPaid();
     } catch (e) {
@@ -920,25 +850,29 @@ function EditPaymentBlock({ sale, customerName, onPaid }) {
   return (
     <>
       <h4 className="text-[13.5px] font-semibold mb-2 pt-4 border-t border-dashed border-line">
-        Payments
+        Payments Received
       </h4>
       <p className="text-[11.5px] text-ink-faint bg-surface-sunken rounded-sm px-3 py-2 mb-4">
-        Payments are separate ledger entries — adding one here doesn't change this sale's amount,
-        it just reduces the customer's outstanding balance.
+        Payments are logged as transactions against this sale. Each additional payment reduces the customer's
+        outstanding balance and shows up in the Transactions ledger.
       </p>
 
-      <div className="grid grid-cols-3 gap-3 mb-4 max-[560px]:grid-cols-1">
+      <div className="grid grid-cols-4 gap-3 mb-4 max-[560px]:grid-cols-1">
         <div className="bg-surface-sunken border border-line-soft rounded-sm px-3 py-2">
           <div className="text-[11px] text-ink-faint mb-1">Final Total</div>
           <div className="text-sm font-semibold tabular-nums">{rupees(total)}</div>
         </div>
         <div className="bg-surface-sunken border border-line-soft rounded-sm px-3 py-2">
           <div className="text-[11px] text-ink-faint mb-1">Received so far</div>
-          <div className="text-sm font-semibold tabular-nums text-positive">{rupees(receivedSoFar)}</div>
+          <div className="text-sm font-semibold tabular-nums text-positive">{rupees(paidSoFar)}</div>
         </div>
         <div className="bg-surface-sunken border border-line-soft rounded-sm px-3 py-2">
-          <div className="text-[11px] text-ink-faint mb-1">Balance due</div>
-          <div className="text-sm font-semibold tabular-nums text-negative">{rupees(due)}</div>
+          <div className="text-[11px] text-ink-faint mb-1">Installments</div>
+          <div className="text-sm font-semibold tabular-nums">{payments.length}</div>
+        </div>
+        <div className="bg-surface-sunken border border-line-soft rounded-sm px-3 py-2">
+          <div className="text-[11px] text-ink-faint mb-1">Balance Due</div>
+          <div className="text-sm font-semibold tabular-nums text-negative">{rupees(totalDue)}</div>
         </div>
       </div>
 
@@ -1006,7 +940,7 @@ function EditPaymentBlock({ sale, customerName, onPaid }) {
                 className={inputCls} value={note}
                 onChange={(e) => setNote(e.target.value)}
                 onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); submit(); } }}
-                placeholder="e.g. Second installment"
+                placeholder={`Leave blank for "${ordinal(nextInstallmentNumber)} installment"`}
               />
             </Field>
           </div>

@@ -1,11 +1,11 @@
 /* ==========================================================================
-   reports.js — all 14 reports + the dashboard summary.
-   Each report returns { title, summary, headers, rows }.
-     - summary: [{ label, value }] rendered as the stat row + the top of
+   reports.js — 14 reports + the dashboard summary.
+
+   Every report returns { title, summary, headers, rows }.
+     - summary: [{ label, value }] — rendered as the stat row + the top of
                 the Excel export
      - headers: string[] table column labels
-     - rows:    string[][] — already formatted display strings, so what you
-                see on screen is exactly what gets exported and printed
+     - rows:    string[][] — already-formatted display strings
    ========================================================================== */
 import { Router } from "express";
 import { query } from "../../config/db.js";
@@ -15,9 +15,9 @@ import { requirePermission } from "../../middleware/rbac.js";
 const router = Router();
 router.use(requireAuth);
 
-/* -------------------------------------------------------------------------
-   Formatting helpers
-   ------------------------------------------------------------------------- */
+/* ------------------------------------------------------------------------- */
+/* Formatting helpers                                                        */
+/* ------------------------------------------------------------------------- */
 function rupees(n) {
   const x = Number(n) || 0;
   const s = String(Math.round(x));
@@ -41,11 +41,9 @@ function adDate(r) {
 }
 function num(v) { const x = Number(v); return isFinite(x) ? x : 0; }
 
-/* -------------------------------------------------------------------------
-   Common query — every business table shares the same date columns, so we
-   can filter them the same way. Pass a `table` name (no alias) for the
-   simple reports; join-requiring reports use raw SQL below.
-   ------------------------------------------------------------------------- */
+/* ------------------------------------------------------------------------- */
+/* Simple table queries                                                      */
+/* ------------------------------------------------------------------------- */
 async function fetchAll(table, filters = {}) {
   const params = [];
   const where = ["deleted_at IS NULL"];
@@ -68,28 +66,14 @@ function parseFilters(req) {
   return f;
 }
 
-/* -------------------------------------------------------------------------
-   Dashboard summary
-   --------------------------------------------------------------------------
-   Company Balance is computed as:
-
-       opening
-       + Σ sales
-       − Σ purchases
-       − Σ transportation
-       − Σ office_expenses
-       − Σ demolitions
-
-   (i.e. "value of goods bought and sold so far", not a cash ledger.)
-
-   The Transactions ledger is still fetched for the "recent" strip at the
-   bottom of the dashboard, but it no longer drives the balance card.
-   ------------------------------------------------------------------------- */
+/* ========================================================================== */
+/* Dashboard summary                                                          */
+/* ========================================================================== */
 router.get("/dashboard-summary", requirePermission("dashboard", "view"), async (req, res, next) => {
   try {
     const f = parseFilters(req);
 
-    // Build the same period filter clause for each table.
+    // Build a period filter clause for the given table alias.
     function whereFor(alias = "") {
       const p = alias ? `${alias}.` : "";
       const params = [];
@@ -101,18 +85,17 @@ router.get("/dashboard-summary", requirePermission("dashboard", "view"), async (
       return { clause: where.join(" AND "), params };
     }
 
-    // Opening balance — from the single-row `settings` JSON value.
+    // Opening balance from settings.
     const settingsRow = await query(`SELECT value FROM settings WHERE key = 'company'`);
     const openingBalance = Number(settingsRow.rows[0]?.value?.openingBalance) || 0;
 
+    // Each table uses its own where clause, but the SAME filters.
     const sW = whereFor();
     const pW = whereFor();
-    const tW = whereFor();
-    const lW = whereFor();
     const oW = whereFor();
     const dW = whereFor();
 
-    const [s, p, t, l, o, d] = await Promise.all([
+    const [s, p, o, d] = await Promise.all([
       query(
         `SELECT COALESCE(SUM(total),0) AS total, COUNT(*)::int AS count
            FROM sales WHERE ${sW.clause}`,
@@ -122,18 +105,6 @@ router.get("/dashboard-summary", requirePermission("dashboard", "view"), async (
         `SELECT COALESCE(SUM(total),0) AS total, COUNT(*)::int AS count
            FROM purchases WHERE ${pW.clause}`,
         pW.params
-      ),
-      query(
-        `SELECT COALESCE(SUM(fee + labor_charge + road_expense + tax_gbse),0) AS total,
-                COUNT(*)::int AS count
-           FROM transportation WHERE ${tW.clause}`,
-        tW.params
-      ),
-      // Kept for the "recent" strip; not used for the balance card.
-      query(
-        `SELECT COALESCE(SUM(CASE WHEN direction='in' THEN amount ELSE -amount END),0) AS net
-           FROM transactions WHERE ${lW.clause}`,
-        lW.params
       ),
       query(
         `SELECT COALESCE(SUM(total),0) AS total
@@ -149,15 +120,17 @@ router.get("/dashboard-summary", requirePermission("dashboard", "view"), async (
 
     const salesTotal      = num(s.rows[0].total);
     const purchasesTotal  = num(p.rows[0].total);
-    const transportTotal  = num(t.rows[0].total);
     const officeTotal     = num(o.rows[0].total);
     const demolitionTotal = num(d.rows[0].total);
+
+    // Transportation is a personal out-of-pocket expense — never touches books.
+    const transportTotal = 0;
+    const transportCount = 0;
 
     const netBalance =
       openingBalance
       + salesTotal
       - purchasesTotal
-      - transportTotal
       - officeTotal
       - demolitionTotal;
 
@@ -195,7 +168,7 @@ router.get("/dashboard-summary", requirePermission("dashboard", "view"), async (
       cards: [
         { label: "Total Sales",     value: rupees(salesTotal),      meta: `${s.rows[0].count} transactions` },
         { label: "Total Purchases", value: rupees(purchasesTotal),  meta: `${p.rows[0].count} purchases` },
-        { label: "Transportation",  value: rupees(transportTotal),  meta: `${t.rows[0].count} deliveries` },
+        { label: "Transportation",  value: rupees(transportTotal),  meta: `${transportCount} deliveries` },
         { label: "Company Balance", value: rupees(netBalance),      meta: "opening + sales − costs" },
       ],
       recent,
@@ -203,11 +176,9 @@ router.get("/dashboard-summary", requirePermission("dashboard", "view"), async (
   } catch (e) { next(e); }
 });
 
-/* -------------------------------------------------------------------------
-   The 14 reports.
-   ------------------------------------------------------------------------- */
-
-/* 1. Monthly Sales */
+/* ------------------------------------------------------------------------- */
+/* 1. Monthly Sales                                                          */
+/* ------------------------------------------------------------------------- */
 router.get("/sales", requirePermission("reports", "view"), async (req, res, next) => {
   try {
     const rows = await fetchAll("sales", parseFilters(req));
@@ -215,29 +186,31 @@ router.get("/sales", requirePermission("reports", "view"), async (req, res, next
     const nameById = new Map(customers.map((c) => [c.id, c.name]));
 
     const total = rows.reduce((s, r) => s + num(r.total), 0);
-    const qty   = rows.reduce((s, r) => s + num(r.net_qty), 0);
+    const qty   = rows.reduce((s, r) => s + num(r.gross_qty), 0);
     const avg   = rows.length ? total / rows.length : 0;
     const delivered = rows.filter((r) => r.status === "Delivered").length;
 
     const summary = [
       { label: "Total Sales",      value: rupees(total) },
-      { label: "Steel Sold (Net)", value: kg(qty) },
+      { label: "Quantity Sold",    value: kg(qty) },
       { label: "Transactions",     value: String(rows.length) },
       { label: "Average Sale",     value: rupees(avg) },
       { label: "Delivered",        value: `${delivered} / ${rows.length}` },
     ];
     const headers = ["Date (BS)", "Date (EN)", "Invoice", "Customer", "Product",
-                     "Gross Qty", "Dust", "Net Qty", "Rate", "Total", "Status", "Company"];
+                     "Quantity", "Rate", "Report Amt", "Final Total", "Status", "Company"];
     const out = rows.map((r) => [
       bsDate(r), adDate(r), r.invoice, nameById.get(r.customer_id) || "—", r.product,
-      kg(r.gross_qty), kg(r.dust_qty), kg(r.net_qty), rupees(r.rate), rupees(r.total),
+      kg(r.gross_qty), rupees(r.rate), rupees(r.report_amount || 0), rupees(r.total),
       r.status, r.company || "—",
     ]);
     res.json({ title: "Monthly Sales Report", summary, headers, rows: out });
   } catch (e) { next(e); }
 });
 
-/* 2. Monthly Purchases */
+/* ------------------------------------------------------------------------- */
+/* 2. Monthly Purchases                                                      */
+/* ------------------------------------------------------------------------- */
 router.get("/purchases", requirePermission("reports", "view"), async (req, res, next) => {
   try {
     const rows = await fetchAll("purchases", parseFilters(req));
@@ -267,37 +240,60 @@ router.get("/purchases", requirePermission("reports", "view"), async (req, res, 
   } catch (e) { next(e); }
 });
 
-/* 3. Transportation */
+/* ------------------------------------------------------------------------- */
+/* 3. Transportation report                                                  */
+/* ------------------------------------------------------------------------- */
 router.get("/transportation", requirePermission("reports", "view"), async (req, res, next) => {
   try {
-    const rows = await fetchAll("transportation", parseFilters(req));
-    const total = rows.reduce(
-      (s, r) => s + num(r.fee) + num(r.labor_charge) + num(r.road_expense) + num(r.tax_gbse),
+    const params = [];
+    const where = ["deleted_at IS NULL"];
+    const f = parseFilters(req);
+    if (f.year)  { params.push(f.year);  where.push(`date_bs_year = $${params.length}`); }
+    if (f.month) { params.push(f.month); where.push(`date_bs_month = $${params.length}`); }
+    if (f.day)   { params.push(f.day);   where.push(`date_bs_day = $${params.length}`); }
+
+    const { rows } = await query(
+      `SELECT * FROM transportation WHERE ${where.join(" AND ")} ORDER BY date_ad DESC, id DESC`,
+      params
+    );
+
+    const totalCost = rows.reduce(
+      (s, r) => s + num(r.load_kg) * num(r.rate) + num(r.labor_charge) + num(r.road_expense) + num(r.tax_gbse),
       0
     );
-    const avg = rows.length ? total / rows.length : 0;
+    const totalLoad = rows.reduce((s, r) => s + num(r.load_kg), 0);
+    const avg = rows.length ? totalCost / rows.length : 0;
     const delivered = rows.filter((r) => r.status === "Delivered").length;
 
     const summary = [
-      { label: "Total Cost",         value: rupees(total) },
+      { label: "Total Cost",         value: rupees(totalCost) },
       { label: "Deliveries",         value: String(rows.length) },
+      { label: "Total Load",         value: kg(totalLoad) },
       { label: "Avg Fee / Delivery", value: rupees(avg) },
       { label: "Delivered",          value: `${delivered} / ${rows.length}` },
     ];
-    const headers = ["Date (BS)", "Date (EN)", "Vehicle", "Driver", "Loader",
-                     "Route", "Load", "Cost", "Status"];
-    const out = rows.map((r) => [
-      bsDate(r), adDate(r), r.vehicle || "—", r.driver || "—", r.loader || "—",
-      `${r.from_location || "—"} → ${r.to_location || "—"}`,
-      kg(r.load_kg),
-      rupees(num(r.fee) + num(r.labor_charge) + num(r.road_expense) + num(r.tax_gbse)),
-      r.status,
-    ]);
+    const headers = ["Date (BS)", "Date (EN)", "Linked To", "Vehicle", "Driver", "Loader",
+                     "Route", "Load", "Rate", "Amount", "Advance", "Total Cost", "Status"];
+    const out = rows.map((r) => {
+      const amount  = num(r.load_kg) * num(r.rate);
+      const totalCost = amount + num(r.labor_charge) + num(r.road_expense) + num(r.tax_gbse);
+      return [
+        bsDate(r), adDate(r),
+        r.link_type === "purchase" ? "Purchase" : (r.customer_name || "Customer"),
+        r.vehicle || "—", r.driver || "—", r.loader || "—",
+        `${r.from_location || "—"} → ${r.to_location || "—"}`,
+        kg(r.load_kg), r.rate ? `${rupees(r.rate)}/kg` : "—",
+        rupees(amount), rupees(r.advance || 0), rupees(totalCost),
+        r.status,
+      ];
+    });
     res.json({ title: "Transportation Report", summary, headers, rows: out });
   } catch (e) { next(e); }
 });
 
-/* 4. Monthly Transactions */
+/* ------------------------------------------------------------------------- */
+/* 4. Monthly Transactions                                                   */
+/* ------------------------------------------------------------------------- */
 router.get("/transactions", requirePermission("reports", "view"), async (req, res, next) => {
   try {
     const rows = await fetchAll("transactions", parseFilters(req));
@@ -323,7 +319,9 @@ router.get("/transactions", requirePermission("reports", "view"), async (req, re
   } catch (e) { next(e); }
 });
 
-/* 5. Office Expenses */
+/* ------------------------------------------------------------------------- */
+/* 5. Office Expenses                                                        */
+/* ------------------------------------------------------------------------- */
 router.get("/office", requirePermission("reports", "view"), async (req, res, next) => {
   try {
     const rows = await fetchAll("office_expenses", parseFilters(req));
@@ -372,7 +370,9 @@ router.get("/office", requirePermission("reports", "view"), async (req, res, nex
   } catch (e) { next(e); }
 });
 
-/* 6. Demolition */
+/* ------------------------------------------------------------------------- */
+/* 6. Demolition                                                             */
+/* ------------------------------------------------------------------------- */
 router.get("/demolition", requirePermission("reports", "view"), async (req, res, next) => {
   try {
     const rows = await fetchAll("demolitions", parseFilters(req));
@@ -429,7 +429,9 @@ router.get("/demolition", requirePermission("reports", "view"), async (req, res,
   } catch (e) { next(e); }
 });
 
-/* 7. Buyer Statement (per customer) */
+/* ------------------------------------------------------------------------- */
+/* 7. Buyer Statement                                                        */
+/* ------------------------------------------------------------------------- */
 router.get("/customer-statement", requirePermission("reports", "view"), async (req, res, next) => {
   try {
     const customerId = Number(req.query.customerId);
@@ -453,23 +455,26 @@ router.get("/customer-statement", requirePermission("reports", "view"), async (r
     );
 
     const total = rows.reduce((s, r) => s + num(r.total), 0);
-    const qty   = rows.reduce((s, r) => s + num(r.net_qty), 0);
+    const qty   = rows.reduce((s, r) => s + num(r.gross_qty), 0);
 
     const summary = [
-      { label: "Total Sales",      value: rupees(total) },
-      { label: "Steel Sold (Net)", value: kg(qty) },
-      { label: "Transactions",     value: String(rows.length) },
+      { label: "Total Sales",   value: rupees(total) },
+      { label: "Quantity Sold", value: kg(qty) },
+      { label: "Transactions",  value: String(rows.length) },
     ];
-    const headers = ["Date (BS)", "Date (EN)", "Invoice", "Product", "Net Qty", "Rate", "Total", "Status", "Company"];
+    const headers = ["Date (BS)", "Date (EN)", "Invoice", "Product", "Quantity", "Rate", "Report Amt", "Final Total", "Status", "Company"];
     const out = rows.map((r) => [
-      bsDate(r), adDate(r), r.invoice, r.product, kg(r.net_qty), rupees(r.rate), rupees(r.total),
+      bsDate(r), adDate(r), r.invoice, r.product, kg(r.gross_qty), rupees(r.rate),
+      rupees(r.report_amount || 0), rupees(r.total),
       r.status, r.company || "—",
     ]);
     res.json({ title: `Buyer Statement — ${customer.name}`, summary, headers, rows: out });
   } catch (e) { next(e); }
 });
 
-/* 8. Supplier Statement (per supplier) */
+/* ------------------------------------------------------------------------- */
+/* 8. Supplier Statement                                                     */
+/* ------------------------------------------------------------------------- */
 router.get("/supplier-statement", requirePermission("reports", "view"), async (req, res, next) => {
   try {
     const supplierId = Number(req.query.supplierId);
@@ -509,14 +514,16 @@ router.get("/supplier-statement", requirePermission("reports", "view"), async (r
   } catch (e) { next(e); }
 });
 
-/* 9. All Buyers */
+/* ------------------------------------------------------------------------- */
+/* 9. All Buyers                                                             */
+/* ------------------------------------------------------------------------- */
 router.get("/all-customers", requirePermission("reports", "view"), async (_req, res, next) => {
   try {
     const { rows } = await query(`
       SELECT c.id, c.name,
-             COALESCE(SUM(s.total),0)   AS sales,
-             COALESCE(SUM(s.net_qty),0) AS qty,
-             COUNT(s.id)::int           AS count
+             COALESCE(SUM(s.total),0)     AS sales,
+             COALESCE(SUM(s.gross_qty),0) AS qty,
+             COUNT(s.id)::int             AS count
         FROM customers c
         LEFT JOIN sales s ON s.customer_id = c.id AND s.deleted_at IS NULL
        GROUP BY c.id, c.name
@@ -528,7 +535,7 @@ router.get("/all-customers", requirePermission("reports", "view"), async (_req, 
       { label: "Customer Groups", value: String(rows.length) },
       { label: "Combined Sales",  value: rupees(total) },
     ];
-    const headers = ["Customer", "Sales", "Steel Sold (Net)", "Transactions", "Share of Sales"];
+    const headers = ["Customer", "Sales", "Quantity Sold", "Transactions", "Share of Sales"];
     const out = rows.map((r) => [
       r.name, rupees(r.sales), kg(r.qty), String(r.count),
       `${total ? ((num(r.sales) / total) * 100).toFixed(1) : "0.0"}%`,
@@ -537,7 +544,9 @@ router.get("/all-customers", requirePermission("reports", "view"), async (_req, 
   } catch (e) { next(e); }
 });
 
-/* 10. All Sellers */
+/* ------------------------------------------------------------------------- */
+/* 10. All Sellers                                                           */
+/* ------------------------------------------------------------------------- */
 router.get("/all-suppliers", requirePermission("reports", "view"), async (_req, res, next) => {
   try {
     const { rows } = await query(`
@@ -565,30 +574,29 @@ router.get("/all-suppliers", requirePermission("reports", "view"), async (_req, 
   } catch (e) { next(e); }
 });
 
-/* 11. Stock */
+/* ------------------------------------------------------------------------- */
+/* 11. Stock                                                                 */
+/* ------------------------------------------------------------------------- */
 router.get("/inventory", requirePermission("reports", "view"), async (_req, res, next) => {
   try {
     const { rows } = await query(
       `SELECT * FROM inventory_items WHERE deleted_at IS NULL ORDER BY name`
     );
     const totalStock = rows.reduce((s, r) => s + num(r.stock_kg), 0);
-    const low = rows.filter((r) => num(r.stock_kg) < num(r.reorder_level)).length;
 
     const summary = [
-      { label: "Total Products",  value: String(rows.length) },
-      { label: "Total Stock",     value: kg(totalStock) },
-      { label: "Low Stock Items", value: String(low) },
+      { label: "Total Products", value: String(rows.length) },
+      { label: "Total Stock",    value: kg(totalStock) },
     ];
-    const headers = ["Product", "Category", "Current Stock", "Reorder Level", "Status"];
-    const out = rows.map((r) => {
-      const isLow = num(r.stock_kg) < num(r.reorder_level);
-      return [r.name, r.category || "—", kg(r.stock_kg), kg(r.reorder_level), isLow ? "Low Stock" : "OK"];
-    });
+    const headers = ["Product", "Category", "Current Stock"];
+    const out = rows.map((r) => [r.name, r.category || "—", kg(r.stock_kg)]);
     res.json({ title: "Stock Report", summary, headers, rows: out });
   } catch (e) { next(e); }
 });
 
-/* 12. Outstanding Balances */
+/* ------------------------------------------------------------------------- */
+/* 12. Outstanding Balances                                                  */
+/* ------------------------------------------------------------------------- */
 router.get("/ledger", requirePermission("reports", "view"), async (_req, res, next) => {
   try {
     const { rows: cust } = await query(`
@@ -668,9 +676,9 @@ router.get("/ledger", requirePermission("reports", "view"), async (_req, res, ne
   } catch (e) { next(e); }
 });
 
-
-/* 13. Company-wise Summary — every column is table-qualified to avoid
-       ambiguity between the joined transportation + purchases tables. */
+/* ------------------------------------------------------------------------- */
+/* 13. Company-wise Summary                                                  */
+/* ------------------------------------------------------------------------- */
 router.get("/company-summary", requirePermission("reports", "view"), async (_req, res, next) => {
   try {
     const { rows } = await query(`
@@ -690,11 +698,6 @@ router.get("/company-summary", requirePermission("reports", "view"), async (_req
         COALESCE((SELECT SUM(p.total)
                     FROM purchases p
                    WHERE p.company = c.company AND p.deleted_at IS NULL), 0) AS purchases,
-        COALESCE((SELECT SUM(t.fee + t.labor_charge + t.road_expense + t.tax_gbse)
-                    FROM transportation t
-                    JOIN purchases p ON p.id = t.purchase_id
-                   WHERE p.company = c.company
-                     AND t.deleted_at IS NULL), 0) AS transport,
         COALESCE((SELECT SUM(e.total)
                     FROM office_expenses e
                    WHERE e.company = c.company AND e.deleted_at IS NULL), 0) AS office,
@@ -708,7 +711,7 @@ router.get("/company-summary", requirePermission("reports", "view"), async (_req
     const combinedSales = rows.reduce((s, r) => s + num(r.sales), 0);
     const combinedProfit = rows.reduce(
       (s, r) =>
-        s + num(r.sales) - num(r.purchases) - num(r.transport) - num(r.office) - num(r.demolition),
+        s + num(r.sales) - num(r.purchases) - num(r.office) - num(r.demolition),
       0
     );
 
@@ -717,13 +720,12 @@ router.get("/company-summary", requirePermission("reports", "view"), async (_req
       { label: "Combined Sales",      value: rupees(combinedSales) },
       { label: "Combined Net Profit", value: rupees(combinedProfit) },
     ];
-    const headers = ["Company", "Sales", "Purchases", "Transport", "Office", "Demolition", "Net Profit"];
+    const headers = ["Company", "Sales", "Purchases", "Office", "Demolition", "Net Profit"];
     const out = rows.map((r) => {
-      const profit =
-        num(r.sales) - num(r.purchases) - num(r.transport) - num(r.office) - num(r.demolition);
+      const profit = num(r.sales) - num(r.purchases) - num(r.office) - num(r.demolition);
       return [
         r.company,
-        rupees(r.sales), rupees(r.purchases), rupees(r.transport),
+        rupees(r.sales), rupees(r.purchases),
         rupees(r.office), rupees(r.demolition), rupees(profit),
       ];
     });
@@ -731,7 +733,9 @@ router.get("/company-summary", requirePermission("reports", "view"), async (_req
   } catch (e) { next(e); }
 });
 
-/* 14. Profit & Loss */
+/* ------------------------------------------------------------------------- */
+/* 14. Profit & Loss                                                         */
+/* ------------------------------------------------------------------------- */
 router.get("/profit", requirePermission("reports", "view"), async (req, res, next) => {
   try {
     const f = parseFilters(req);
@@ -756,9 +760,11 @@ router.get("/profit", requirePermission("reports", "view"), async (req, res, nex
     const purchases  = await sumFor("purchases");
     const office     = await sumFor("office_expenses");
     const demolition = await sumFor("demolitions");
-    const transport  = await sumFor("transportation", "fee + labor_charge + road_expense + tax_gbse");
 
-    const totalCosts = purchases + transport + office + demolition;
+    // Transportation is a personal expense — not on the books.
+    const transport = 0;
+
+    const totalCosts = purchases + office + demolition;
     const profit = sales - totalCosts;
     const margin = sales ? (profit / sales) * 100 : 0;
 
@@ -772,7 +778,6 @@ router.get("/profit", requirePermission("reports", "view"), async (req, res, nex
     const out = [
       ["Total Sales",          rupees(sales)],
       ["Total Purchases",      rupees(purchases)],
-      ["Transportation Cost",  rupees(transport)],
       ["Office Expenses",      rupees(office)],
       ["Demolition Cost",      rupees(demolition)],
       ["Total Costs",          rupees(totalCosts)],

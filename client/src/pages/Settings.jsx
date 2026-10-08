@@ -96,7 +96,7 @@ export default function Settings() {
               value={company.name}
               onChange={(e) => setCompany((c) => ({ ...c, name: e.target.value }))}
               className={inputCls}
-              placeholder="e.g. ASN Demolition Pvt.Ltd"
+              placeholder="e.g. ScrapLink Pvt.Ltd"
             />
           </label>
 

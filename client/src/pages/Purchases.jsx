@@ -1,9 +1,20 @@
 ﻿/* ==========================================================================
-   Purchases.jsx — multi-line purchase entry.
-   Each added line gets its own invoice number; truck/transport/date shared.
-   Uses POST /api/purchases/batch so the whole trip is saved atomically.
+   Purchases.jsx — multi-line purchase entry with trip grouping.
+
+   - One form = one trip. trip_id is a UUID generated when the form opens.
+   - Every line shares: date, status, company, truck_no, trip_id.
+   - Per-line: invoice (auto-numbered, editable), supplier, person, phone,
+     material, gross, report dust, rate, total (= gross × rate),
+     single payment (amount + method).
+   - One transportation row is auto-created server-side for the trip.
+   - Print: if the row has a trip_id and siblings, prints the shared-truck
+     invoice (one supplier box per purchase + grand total). Otherwise prints
+     the single-purchase invoice.
+
+   Dust is a report-only figure — it does NOT reduce the total.
    ========================================================================== */
 import { useEffect, useMemo, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import { api } from "../api/client";
 import { useAuth } from "../auth/AuthContext";
 import {
@@ -12,8 +23,12 @@ import {
 } from "../components/ui";
 import DataTable from "../components/DataTable";
 import { printVoucher } from "../lib/printVoucher";
-import { bsToday, bsToAdString, adToBs, formatBs } from "../lib/nepali-date";
+import {
+  bsToday, bsToAdString, formatBs,
+  NEPALI_MONTHS, NEPALI_MONTHS_EN,
+} from "../lib/nepali-date";
 
+const BRAND = "ScrapLink Pvt.Ltd";
 const todayBs = bsToday();
 
 const emptyLine = () => ({
@@ -28,9 +43,6 @@ const emptyLine = () => ({
   status: "Delivered",
   amount_paid: "0",
   payment_method: "Cash",
-  cash_source: "",
-  paid_by: "",
-  signature: "",
 });
 
 const EMPTY_HEADER = {
@@ -38,23 +50,9 @@ const EMPTY_HEADER = {
   date_bs_month: todayBs.month,
   date_bs_day:   todayBs.day,
   date_ad:       bsToAdString(todayBs),
-
-  truck_weight_kg: "",
-  truck_no: "",
-  truck_driver: "",
-  truck_driver_phone: "",
-  from_location: "",
-  to_location: "",
-  loader_name: "",
-
-  transport_fee: "0",
-  labor_charge: "0",
-  road_expense: "0",
-  tax_gbse: "0",
-
-  status: "Delivered",
-  company_from: "ASN Demolition Pvt.Ltd",
-  company_to: "",
+  status:        "Delivered",
+  company:       BRAND,
+  truck_no:      "",
 };
 
 const num = (v) => { const n = Number(v); return isFinite(n) ? n : 0; };
@@ -65,18 +63,51 @@ const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) =>
   ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c])
 );
 
+/* ---------- AD ↔ BS helpers ---------- */
+const AD_MONTHS = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+function prettyAd(s) {
+  if (!s) return "—";
+  const [y, m, d] = String(s).slice(0, 10).split("-").map(Number);
+  if (!y || !m || !d) return s;
+  return `${d} ${AD_MONTHS[m - 1]} ${y}`;
+}
+
+const BS_MONTH_LENGTHS = {
+  2070:[31,31,31,32,31,31,29,30,30,29,30,30],
+  2071:[31,31,32,31,31,31,30,29,30,29,30,30],
+  2072:[31,32,31,32,31,30,30,29,30,29,30,30],
+  2073:[31,32,31,32,31,30,30,30,29,29,30,31],
+  2074:[31,31,31,32,31,31,30,29,30,29,30,30],
+  2075:[31,31,32,31,31,31,30,29,30,29,30,30],
+  2076:[31,32,31,32,31,30,30,30,29,29,30,30],
+  2077:[31,32,31,32,31,30,30,30,29,30,29,31],
+  2078:[31,31,31,32,31,31,30,29,30,29,30,30],
+  2079:[31,31,32,31,31,31,30,29,30,29,30,30],
+  2080:[31,32,31,32,31,30,30,30,29,29,30,30],
+  2081:[31,32,31,32,31,30,30,30,29,30,29,31],
+  2082:[31,31,32,31,31,31,30,29,30,29,30,30],
+  2083:[31,31,32,31,31,31,30,29,30,29,30,30],
+  2084:[31,32,31,32,31,30,30,30,29,29,30,31],
+  2085:[30,32,31,32,31,30,30,30,29,30,29,31],
+  2086:[31,31,32,31,31,31,30,29,30,29,30,30],
+  2087:[31,31,32,31,31,31,30,30,29,30,30,30],
+  2088:[30,31,32,32,30,31,30,30,29,30,30,30],
+  2089:[30,32,31,32,31,30,30,30,29,30,30,30],
+};
+function daysInBsMonth(year, month) {
+  const lengths = BS_MONTH_LENGTHS[year] || BS_MONTH_LENGTHS[2083];
+  return lengths[month - 1] || 30;
+}
+
 const lineComputed = (line) => {
   const gross = num(line.gross_qty);
   const dust  = num(line.dust_qty);
-  const net   = Math.max(0, gross - dust);
+  const net   = Math.max(0, gross);
   const rate  = num(line.rate);
   const total = net * rate;
   const due   = Math.max(0, total - num(line.amount_paid));
   return { gross, dust, net, rate, total, due };
 };
-
-const headerTransportTotal = (h) =>
-  num(h.transport_fee) + num(h.labor_charge) + num(h.road_expense) + num(h.tax_gbse);
 
 const nextInvoiceFrom = (invoices) => {
   const max = invoices.reduce((m, inv) => {
@@ -86,7 +117,19 @@ const nextInvoiceFrom = (invoices) => {
   return `PUR-${String(max + 1).padStart(4, "0")}`;
 };
 
+function makeUuid() {
+  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
+    return crypto.randomUUID();
+  }
+  return "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g, (c) => {
+    const r = (Math.random() * 16) | 0;
+    const v = c === "x" ? r : (r & 0x3) | 0x8;
+    return v.toString(16);
+  });
+}
+
 export default function Purchases() {
+  const nav = useNavigate();
   const { has, canDelete } = useAuth();
   const canCreate = has("purchases", "create");
   const canUpdate = has("purchases", "update");
@@ -103,6 +146,7 @@ export default function Purchases() {
 
   const [showForm, setShowForm] = useState(false);
   const [editing, setEditing] = useState(null);
+  const [tripId, setTripId] = useState(null);
   const [header, setHeader] = useState(EMPTY_HEADER);
   const [lines, setLines] = useState([emptyLine()]);
   const [saving, setSaving] = useState(false);
@@ -130,7 +174,7 @@ export default function Purchases() {
   }
   useEffect(() => { load(); }, []);
 
-  /* ---------- BS <-> AD sync ---------- */
+  /* ---------- BS ↔ AD sync ---------- */
   useEffect(() => {
     if (!showForm) return;
     const y = Number(header.date_bs_year);
@@ -140,7 +184,7 @@ export default function Purchases() {
     try {
       const s = bsToAdString({ year: y, month: m, day: d });
       if (s !== header.date_ad) setHeader((h) => ({ ...h, date_ad: s }));
-    } catch { /* invalid combination */ }
+    } catch { /* invalid */ }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [header.date_bs_year, header.date_bs_month, header.date_bs_day, showForm]);
 
@@ -185,6 +229,7 @@ export default function Purchases() {
   /* ---------- Form open/close ---------- */
   function openCreate() {
     setEditing(null);
+    setTripId(makeUuid());
     setHeader({ ...EMPTY_HEADER });
     const existingInvoices = rows.map((r) => r.invoice);
     const first = {
@@ -199,25 +244,15 @@ export default function Purchases() {
 
   function openEdit(row) {
     setEditing(row);
+    setTripId(row.trip_id || null);
     setHeader({
       date_bs_year:  row.date_bs_year  || todayBs.year,
       date_bs_month: row.date_bs_month || todayBs.month,
       date_bs_day:   row.date_bs_day   || todayBs.day,
       date_ad:       row.date_ad ? String(row.date_ad).slice(0, 10) : bsToAdString(todayBs),
-      truck_weight_kg:    row.truck_weight_kg ?? "",
-      truck_no:           row.truck_no || "",
-      truck_driver:       row.truck_driver || "",
-      truck_driver_phone: row.truck_driver_phone || "",
-      from_location:      row.from_location || "",
-      to_location:        row.to_location || "",
-      loader_name:        row.loader_name || "",
-      transport_fee: row.transport_fee ?? "0",
-      labor_charge:  row.labor_charge  ?? "0",
-      road_expense:  row.road_expense  ?? "0",
-      tax_gbse:      row.tax_gbse      ?? "0",
-      status:  row.status  || "Delivered",
-      company_from: row.company || "ASN Demolition Pvt.Ltd",
-      company_to:   "",
+      status:        row.status || "Delivered",
+      company:       row.company || BRAND,
+      truck_no:      row.truck_no || "",
     });
     setLines([{
       invoice: row.invoice || "",
@@ -231,9 +266,6 @@ export default function Purchases() {
       status:  row.status || "Delivered",
       amount_paid: "0",
       payment_method: "Cash",
-      cash_source: row.cash_source || "",
-      paid_by:     row.paid_by     || "",
-      signature:   row.signature   || "",
     }]);
     setFormError(null);
     setShowForm(true);
@@ -255,8 +287,8 @@ export default function Purchases() {
   }
 
   /* ---------- Save ---------- */
-  async function save(e) {
-    e.preventDefault();
+  async function save(e, thenGoToTransport = false) {
+    if (e) e.preventDefault();
     setSaving(true);
     setFormError(null);
 
@@ -268,6 +300,10 @@ export default function Purchases() {
       if (!l.material.trim())  { setFormError(`Line ${i + 1}: material is required.`);  setSaving(false); return; }
       if (c.gross <= 0)        { setFormError(`Line ${i + 1}: gross qty must be > 0.`); setSaving(false); return; }
       if (c.rate <= 0)         { setFormError(`Line ${i + 1}: rate must be > 0.`);      setSaving(false); return; }
+      if (l.contact_phone && !/^\d{10}$/.test(l.contact_phone)) {
+        setFormError(`Line ${i + 1}: phone must be exactly 10 digits.`);
+        setSaving(false); return;
+      }
     }
 
     const baseHeader = {
@@ -275,58 +311,37 @@ export default function Purchases() {
       date_bs_month: Number(header.date_bs_month),
       date_bs_day:   Number(header.date_bs_day),
       date_ad:       header.date_ad,
-
-      truck_weight_kg:    num(header.truck_weight_kg) || undefined,
-      truck_no:           header.truck_no.trim()           || undefined,
-      truck_driver:       header.truck_driver.trim()       || undefined,
-      truck_driver_phone: header.truck_driver_phone.trim() || undefined,
-      from_location:      header.from_location.trim()      || undefined,
-      to_location:        header.to_location.trim()        || undefined,
-      loader_name:        header.loader_name.trim()        || undefined,
-
-      company: header.company_from.trim() || undefined,
+      company:       header.company.trim() || undefined,
+      truck_no:      header.truck_no.trim() || null,
+      trip_id:       tripId,
     };
 
-    const linePayload = (l, i) => {
+    const linePayload = (l) => {
       const c = lineComputed(l);
-      const isFirst = i === 0;
       return {
         ...baseHeader,
-        invoice: l.invoice.trim(),
+        invoice:     l.invoice.trim(),
         supplier_id: Number(l.supplier_id),
         material:    l.material.trim(),
-
-        gross_qty: c.gross,
-        dust_qty:  c.dust,
-        net_qty:   c.net,
-        rate:      c.rate,
-        total:     c.total,
-
+        gross_qty:   c.gross,
+        dust_qty:    c.dust,
+        net_qty:     c.net,
+        rate:        c.rate,
+        total:       c.total,
         contact_person: l.contact_person.trim() || undefined,
         contact_phone:  l.contact_phone.trim()  || undefined,
-
-        transport_fee: isFirst ? num(header.transport_fee) : 0,
-        labor_charge:  isFirst ? num(header.labor_charge)  : 0,
-        road_expense:  isFirst ? num(header.road_expense)  : 0,
-        tax_gbse:      isFirst ? num(header.tax_gbse)      : 0,
-
         status: l.status,
       };
     };
 
     try {
       if (editing) {
-        // Editing a single existing row — no batch, no multi-line.
-        await api.patch(`/api/purchases/${editing.id}`, linePayload(lines[0], 0));
+        await api.patch(`/api/purchases/${editing.id}`, linePayload(lines[0]));
       } else {
-        // Batch create — one POST, one transaction on the server.
-        const payloads = lines.map((l, i) => {
-          const p = linePayload(l, i);
+        const payloads = lines.map((l) => {
+          const p = linePayload(l);
           p.amount_paid    = num(l.amount_paid);
           p.payment_method = l.payment_method;
-          p.cash_source    = l.cash_source.trim() || undefined;
-          p.paid_by        = l.paid_by.trim()     || undefined;
-          p.signature      = l.signature.trim()   || undefined;
           return p;
         });
         await api.post("/api/purchases/batch", { lines: payloads });
@@ -334,6 +349,10 @@ export default function Purchases() {
 
       setShowForm(false);
       await load();
+
+      if (thenGoToTransport && !editing) {
+        nav(`/transportation?trip_id=${encodeURIComponent(tripId)}`);
+      }
     } catch (e) {
       setFormError(e.message || "Could not save purchase");
     } finally {
@@ -356,6 +375,7 @@ export default function Purchases() {
   }
 
   /* ---------- Print ---------- */
+
   async function fetchPaymentsForPurchase(id) {
     try {
       const { items } = await api.get("/api/transactions");
@@ -365,7 +385,91 @@ export default function Purchases() {
     } catch { return []; }
   }
 
-  async function printPurchaseInvoice(row) {
+  function siblingsForTrip(row) {
+    if (!row.trip_id) return [row];
+    const siblings = rows.filter((r) => r.trip_id === row.trip_id);
+    if (!siblings.length) return [row];
+    return siblings.sort((a, b) => a.id - b.id);
+  }
+
+  function bsShort(row) {
+    return `${row.date_bs_year}/${String(row.date_bs_month).padStart(2, "0")}/${String(row.date_bs_day).padStart(2, "0")}`;
+  }
+
+  function supplierBoxHtml(row, index, total, payments) {
+    const supplierName = supplierNameById.get(row.supplier_id) || "—";
+    const paid = payments.reduce((s, p) => s + num(p.amount), 0);
+    const due = Math.max(0, num(row.total) - paid);
+
+    const paymentRows = payments.length
+      ? payments.map((p) => `
+        <tr>
+          <td>${esc(bsShort(p))}</td>
+          <td>${esc(p.method || "-")}</td>
+          <td>${esc(p.note || "-")}</td>
+          <td class="num">${esc(rupees(p.amount))}</td>
+        </tr>`).join("")
+      : `<tr><td colspan="4" style="text-align:center;color:#888;">No payments recorded.</td></tr>`;
+
+    return `
+      <div class="doc-supplier-box">
+        <div class="doc-supplier-head">
+          <div>
+            <div class="doc-supplier-label">
+              SUPPLIER ${index + 1} OF ${total} · ${esc(row.invoice)}
+            </div>
+            <div class="doc-supplier-name">${esc(supplierName)}</div>
+            ${(row.contact_person || row.contact_phone)
+              ? `<div class="doc-box-sub">${esc([row.contact_person, row.contact_phone].filter(Boolean).join(" · "))}</div>`
+              : ""}
+          </div>
+          <div class="doc-supplier-date">
+            <div class="np">${esc(formatBs(row))}</div>
+            <div>${esc(adStr(row))}</div>
+            <div>${esc(row.status || "Delivered")}</div>
+          </div>
+        </div>
+
+        <table class="doc-table">
+          <thead>
+            <tr>
+              <th>Material</th>
+              <th class="num">Gross Qty</th>
+              <th class="num">Dust</th>
+              <th class="num">Net Qty</th>
+              <th class="num">Rate / kg</th>
+              <th class="num">Amount</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>${esc(row.material || "—")}</td>
+              <td class="num">${esc(kg(row.gross_qty))}</td>
+              <td class="num">${esc(kg(row.dust_qty))}</td>
+              <td class="num">${esc(kg(row.net_qty))}</td>
+              <td class="num">${esc(rupees(row.rate))}</td>
+              <td class="num">${esc(rupees(row.total))}</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <div class="doc-section-title">Payments Made</div>
+        <table class="doc-table">
+          <thead>
+            <tr><th>Date (BS)</th><th>Method</th><th>Note</th><th class="num">Amount</th></tr>
+          </thead>
+          <tbody>${paymentRows}</tbody>
+        </table>
+
+        <div class="doc-summary">
+          <div><span>Total Amount</span><span>${esc(rupees(row.total))}</span></div>
+          <div><span>Paid</span><span>${esc(rupees(paid))}</span></div>
+          <div class="doc-summary-strong"><span>Balance Due</span><span>${esc(rupees(due))}</span></div>
+        </div>
+      </div>`;
+  }
+
+  async function printSinglePurchase(row) {
     const supplierName = supplierNameById.get(row.supplier_id) || "—";
     const payments = await fetchPaymentsForPurchase(row.id);
     const paidTotal = payments.reduce((s, p) => s + num(p.amount), 0);
@@ -376,17 +480,19 @@ export default function Purchases() {
 
     const paymentRows = payments.map((p) => `
       <tr>
-        <td>${esc(formatBs(p))}</td>
+        <td>${esc(bsShort(p))}</td>
         <td>${esc(p.method || "-")}</td>
         <td>${esc(p.note || "-")}</td>
         <td class="num">${esc(rupees(p.amount))}</td>
       </tr>`).join("");
 
-    const html = `
+    const company = row.company || BRAND;
+
+    printVoucher(`
       <div class="doc-sheet">
         <div class="doc-letterhead">
           <div class="doc-brand">
-            <div class="doc-company">${esc(row.company || "ASN Demolition Pvt.Ltd")}</div>
+            <div class="doc-company">${esc(company)}</div>
           </div>
           <div class="doc-kind">
             <div class="doc-title">Purchase Invoice</div>
@@ -397,7 +503,7 @@ export default function Purchases() {
         <div class="doc-meta">
           <div>Date (BS)<strong>${esc(formatBs(row))}</strong></div>
           <div>Date (English)<strong>${esc(adStr(row))}</strong></div>
-          <div>Company<strong>${esc(row.company || "ASN Demolition Pvt.Ltd")}</strong></div>
+          <div>Company<strong>${esc(company)}</strong></div>
           <div>Status<strong>${esc(row.status || "Delivered")}</strong></div>
         </div>
 
@@ -411,16 +517,22 @@ export default function Purchases() {
           </div>
           <div class="doc-box">
             <div class="doc-box-title">Billed To</div>
-            <div class="doc-box-main">${esc(row.company || "ASN Demolition Pvt.Ltd")}</div>
+            <div class="doc-box-main">${esc(company)}</div>
           </div>
         </div>
+
+        ${row.truck_no ? `
+          <div class="doc-fields doc-fields-2">
+            <div><span>Truck No.</span><strong>${esc(row.truck_no)}</strong></div>
+            <div><span>Invoice</span><strong>${esc(row.invoice)}</strong></div>
+          </div>` : ""}
 
         <div class="doc-section-title">Product Details</div>
         <table class="doc-table">
           <thead>
             <tr>
-              <th>Material</th><th class="num">Gross Qty</th><th class="num">Dust</th>
-              <th class="num">Net Qty</th><th class="num">Rate / kg</th><th class="num">Amount</th>
+              <th>Material</th><th class="num">Gross Qty</th><th class="num">Report Dust</th>
+              <th class="num">Rate / kg</th><th class="num">Amount</th>
             </tr>
           </thead>
           <tbody>
@@ -428,7 +540,6 @@ export default function Purchases() {
               <td>${esc(row.material || "—")}</td>
               <td class="num">${esc(kg(row.gross_qty))}</td>
               <td class="num">${esc(kg(row.dust_qty))}</td>
-              <td class="num">${esc(kg(row.net_qty))}</td>
               <td class="num">${esc(rupees(row.rate))}</td>
               <td class="num">${esc(rupees(row.total))}</td>
             </tr>
@@ -445,9 +556,9 @@ export default function Purchases() {
           </table>` : ""}
 
         <div class="doc-summary">
-          <div><span>Total Amount (product)</span><span>${esc(rupees(row.total))}</span></div>
+          <div><span>Total Amount</span><span>${esc(rupees(row.total))}</span></div>
           <div><span>Paid</span><span>${esc(rupees(paidTotal))}</span></div>
-          <div class="doc-summary-strong"><span>Balance Due (product only)</span><span>${esc(rupees(due))}</span></div>
+          <div class="doc-summary-strong"><span>Balance Due</span><span>${esc(rupees(due))}</span></div>
         </div>
 
         ${transportTotal > 0 ? `
@@ -461,16 +572,88 @@ export default function Purchases() {
           </div>` : ""}
 
         <div class="doc-signatures">
-          <div>Received By${row.signature ? ": " + esc(row.signature) : ""}</div>
-          <div>Authorized By${row.paid_by ? ": " + esc(row.paid_by) : ""}</div>
+          <div>Received By</div>
+          <div>Authorized By</div>
         </div>
 
         <div class="doc-foot">
-          Printed on ${esc(new Date().toLocaleString())} from ${esc(row.company || "ASN Demolition Pvt.Ltd")} management system.
+          Printed on ${esc(new Date().toLocaleString())} from ${esc(company)} management system.
         </div>
-      </div>`;
+      </div>`);
+  }
 
-    printVoucher(html);
+  async function printSharedTruckInvoice(primaryRow) {
+    const trip = siblingsForTrip(primaryRow);
+    const company = trip[0].company || BRAND;
+    const invoices = trip.map((r) => r.invoice).join(", ");
+    const first = trip[0];
+
+    const paymentLists = await Promise.all(
+      trip.map((r) => fetchPaymentsForPurchase(r.id))
+    );
+
+    const boxes = trip.map((row, i) =>
+      supplierBoxHtml(row, i, trip.length, paymentLists[i] || [])
+    ).join("");
+
+    const grandTotal = trip.reduce((s, r) => s + num(r.total), 0);
+    const grandPaid = paymentLists.reduce(
+      (s, list) => s + list.reduce((ss, p) => ss + num(p.amount), 0),
+      0
+    );
+    const grandDue = Math.max(0, grandTotal - grandPaid);
+
+    printVoucher(`
+      <div class="doc-sheet">
+        <div class="doc-letterhead">
+          <div class="doc-brand">
+            <div class="doc-company">${esc(company)}</div>
+          </div>
+          <div class="doc-kind">
+            <div class="doc-title">Purchase Invoice (Shared Truck)</div>
+            <div class="doc-no">No. ${esc(invoices)}</div>
+          </div>
+        </div>
+
+        <div class="doc-meta">
+          <div>Date (BS)<strong>${esc(formatBs(first))}</strong></div>
+          <div>Date (English)<strong>${esc(adStr(first))}</strong></div>
+          <div>Company<strong>${esc(company)}</strong></div>
+          <div>Suppliers<strong>${trip.length}</strong></div>
+        </div>
+
+        ${first.truck_no ? `
+          <div class="doc-fields doc-fields-2">
+            <div><span>Truck No.</span><strong>${esc(first.truck_no)}</strong></div>
+            <div><span>Status</span><strong>${esc(first.status || "Delivered")}</strong></div>
+          </div>` : ""}
+
+        ${boxes}
+
+        <div class="doc-summary doc-summary-grand">
+          <div><span>All Orders Total</span><span>${esc(rupees(grandTotal))}</span></div>
+          <div><span>All Paid</span><span>${esc(rupees(grandPaid))}</span></div>
+          <div class="doc-summary-strong"><span>All Balance Due</span><span>${esc(rupees(grandDue))}</span></div>
+        </div>
+
+        <div class="doc-signatures">
+          <div>Received By</div>
+          <div>Authorized By</div>
+        </div>
+
+        <div class="doc-foot">
+          Printed on ${esc(new Date().toLocaleString())} from ${esc(company)} management system.
+        </div>
+      </div>`);
+  }
+
+  async function printPurchaseInvoice(row) {
+    const siblings = siblingsForTrip(row);
+    if (siblings.length > 1) {
+      await printSharedTruckInvoice(row);
+    } else {
+      await printSinglePurchase(row);
+    }
   }
 
   /* ---------- Table columns ---------- */
@@ -482,10 +665,10 @@ export default function Purchases() {
       render: (r) => supplierNameById.get(r.supplier_id) || "—" },
     { key: "material", label: "Material" },
     { key: "gross_qty", label: "Gross", numeric: true, render: (r) => kg(r.gross_qty) },
-    { key: "dust_qty",  label: "Dust",  numeric: true, render: (r) => kg(r.dust_qty) },
+    { key: "dust_qty",  label: "Report", numeric: true, render: (r) => kg(r.dust_qty) },
     { key: "net_qty",   label: "Net",   numeric: true, render: (r) => kg(r.net_qty) },
     { key: "rate",      label: "Rate",  numeric: true, render: (r) => `${rupees(r.rate)}/kg` },
-    { key: "total", label: "Total", numeric: true, render: (r) => rupees(r.total) },
+    { key: "total",     label: "Total", numeric: true, render: (r) => rupees(r.total) },
     { key: "paid_amount", label: "Paid", numeric: true,
       render: (r) => <span className="text-positive">{rupees(r.paid_amount || 0)}</span> },
     { key: "due_amount", label: "Balance", numeric: true,
@@ -584,7 +767,11 @@ export default function Purchases() {
           wide
           footer={
             <>
-              <Button onClick={() => printPurchaseInvoice(detail)}>Print</Button>
+              <Button onClick={() => printPurchaseInvoice(detail)}>
+                {siblingsForTrip(detail).length > 1
+                  ? `Print All ${siblingsForTrip(detail).length} Orders`
+                  : "Print"}
+              </Button>
               <Button onClick={() => setDetail(null)}>Close</Button>
             </>
           }
@@ -600,21 +787,22 @@ export default function Purchases() {
             <DetailPair label="Date (EN)" value={adStr(detail)} />
             <DetailPair label="Material" value={detail.material || "—"} />
             <DetailPair label="Status" value={detail.status || "—"} />
-            <DetailPair label="Gross / Dust / Net"
+            <DetailPair label="Gross / Report / Net"
               value={`${kg(detail.gross_qty)} / ${kg(detail.dust_qty)} / ${kg(detail.net_qty)}`} />
             <DetailPair label="Rate" value={`${rupees(detail.rate)}/kg`} />
             <DetailPair label="Total (product)" value={rupees(detail.total)} />
-            <DetailPair label="Transport Cost"
-              value={rupees(
-                num(detail.transport_fee) + num(detail.labor_charge) +
-                num(detail.road_expense) + num(detail.tax_gbse)
-              )} />
-            <DetailPair label="Truck No." value={detail.truck_no || "—"} />
-            <DetailPair label="Driver" value={detail.truck_driver || "—"} />
-            <DetailPair label="Driver Phone" value={detail.truck_driver_phone || "—"} />
-            <DetailPair label="Loader" value={detail.loader_name || "—"} />
-            <DetailPair label="From" value={detail.from_location || "—"} />
-            <DetailPair label="To" value={detail.to_location || "—"} />
+            {detail.truck_no ? <DetailPair label="Truck No." value={detail.truck_no} /> : null}
+            {detail.trip_id ? <DetailPair label="Trip Group" value={detail.trip_id.slice(0, 8) + "…"} /> : null}
+            {siblingsForTrip(detail).length > 1 && (
+              <DetailPair
+                label="Same Truck As"
+                value={siblingsForTrip(detail)
+                  .filter((r) => r.id !== detail.id)
+                  .map((r) => `${supplierNameById.get(r.supplier_id) || "—"} (${r.invoice})`)
+                  .join(", ")}
+                span={2}
+              />
+            )}
           </div>
         </Modal>
       )}
@@ -622,34 +810,73 @@ export default function Purchases() {
       {/* Create / edit modal */}
       {showForm && (
         <Modal
-          title={editing
-            ? `Edit Purchase — ${editing.invoice}`
-            : `New Purchase — ${lines.length} line${lines.length > 1 ? "s" : ""}`}
+          title={editing ? `Edit Purchase — ${editing.invoice}` : "New Purchase"}
           onClose={() => setShowForm(false)}
           wide
           footer={
             <>
               <Button onClick={() => setShowForm(false)} disabled={saving}>Cancel</Button>
+              {!editing && (
+                <Button type="button" onClick={() => save(null, true)} disabled={saving}>
+                  Save &amp; Add Transport
+                </Button>
+              )}
               <Button variant="primary" type="submit" form="purchase-form" disabled={saving}>
-                {saving ? "Saving…" : editing ? "Save Changes" : `Save ${lines.length > 1 ? `${lines.length} Purchases` : "Purchase"}`}
+                {saving ? "Saving…" : editing ? "Save Changes" : "Save Purchase"}
               </Button>
             </>
           }
         >
-          <form id="purchase-form" onSubmit={save}>
+          <form id="purchase-form" onSubmit={(e) => save(e, false)}>
             {formError && (
               <div className="mb-4 text-sm text-negative bg-negative-tint border border-negative-tint rounded-md px-3 py-2">
                 {formError}
               </div>
             )}
 
-            {/* ============ SHARED HEADER ============ */}
-            <h4 className="text-[13.5px] font-semibold mb-2">Truck Trip — shared header</h4>
             <p className="text-[11.5px] text-ink-faint bg-surface-sunken rounded-sm px-3 py-2 mb-4">
-              All purchases below share this date, truck and transport cost. Each purchase gets its own invoice and supplier.
+              Purchased quantity (net, after dust) is added automatically to Inventory if the material name matches an existing item.
+              Bought from more than one supplier on the same truck? Use <strong>+ Add Another Purchase</strong> — the truck number
+              below is shared; only the supplier, material, weights and rate are per-line.
             </p>
 
+            {/* ============ SHARED HEADER ============ */}
             <div className="grid grid-cols-2 gap-3.5 mb-5 max-[560px]:grid-cols-1">
+              <Field label="Month (BS)">
+                <select className={selectCls} value={header.date_bs_month}
+                  onChange={(e) => {
+                    const m = Number(e.target.value);
+                    setHeader((h) => {
+                      const maxDay = daysInBsMonth(Number(h.date_bs_year), m);
+                      return {
+                        ...h,
+                        date_bs_month: m,
+                        date_bs_day: Math.min(Number(h.date_bs_day) || 1, maxDay),
+                      };
+                    });
+                  }}>
+                  {NEPALI_MONTHS.map((np, i) => (
+                    <option key={i} value={i + 1}>
+                      {np} / {NEPALI_MONTHS_EN[i]}
+                    </option>
+                  ))}
+                </select>
+              </Field>
+              <Field label="Day">
+                <select className={selectCls} value={header.date_bs_day}
+                  onChange={(e) => setHeader((h) => ({ ...h, date_bs_day: Number(e.target.value) }))}>
+                  {Array.from(
+                    { length: daysInBsMonth(Number(header.date_bs_year), Number(header.date_bs_month)) },
+                    (_, i) => i + 1
+                  ).map((d) => <option key={d} value={d}>{d}</option>)}
+                </select>
+              </Field>
+
+              <Field label="English Date" hint="auto-computed from BS">
+                <div className={inputCls + " !bg-surface-sunken text-ink-soft"}>
+                  {prettyAd(header.date_ad)}
+                </div>
+              </Field>
               <Field label="Status">
                 <select className={selectCls} value={header.status}
                   onChange={(e) => setHeader((h) => ({ ...h, status: e.target.value }))}>
@@ -657,112 +884,20 @@ export default function Purchases() {
                   <option value="Pending">Pending</option>
                 </select>
               </Field>
-              <Field label="Company From">
-                <input className={inputCls} value={header.company_from}
-                  onChange={(e) => setHeader((h) => ({ ...h, company_from: e.target.value }))} />
-              </Field>
-              <Field label="Company To">
-                <input className={inputCls} value={header.company_to}
-                  placeholder="Receiving company"
-                  onChange={(e) => setHeader((h) => ({ ...h, company_to: e.target.value }))} />
-              </Field>
-              <div />
 
-              <Field label="Date (BS Year)">
-                <input type="number" min="2000" max="2200" className={inputCls} value={header.date_bs_year}
-                  onChange={(e) => setHeader((h) => ({ ...h, date_bs_year: e.target.value }))} />
+              <Field label="Company">
+                <div className={inputCls + " !bg-surface-sunken text-ink-soft"}>
+                  {BRAND}
+                </div>
               </Field>
-              <Field label="Date (BS Month 1-12)">
-                <input type="number" min="1" max="12" className={inputCls} value={header.date_bs_month}
-                  onChange={(e) => setHeader((h) => ({ ...h, date_bs_month: e.target.value }))} />
-              </Field>
-              <Field label="Date (BS Day)">
-                <input type="number" min="1" max="32" className={inputCls} value={header.date_bs_day}
-                  onChange={(e) => setHeader((h) => ({ ...h, date_bs_day: e.target.value }))} />
-              </Field>
-              <Field label="Date (AD)" hint="auto-synced with BS">
-                <input type="date" className={inputCls} value={header.date_ad}
-                  onChange={(e) => {
-                    const ad = e.target.value;
-                    setHeader((h) => ({ ...h, date_ad: ad }));
-                    try {
-                      const d = new Date(ad);
-                      if (!isNaN(d)) {
-                        const bs = adToBs(d);
-                        setHeader((h) => ({
-                          ...h,
-                          date_bs_year: bs.year, date_bs_month: bs.month, date_bs_day: bs.day, date_ad: ad,
-                        }));
-                      }
-                    } catch { /* ignore */ }
-                  }} />
-              </Field>
-            </div>
-
-            <h4 className="text-[13.5px] font-semibold mb-2 pt-4 border-t border-dashed border-line">
-              Truck &amp; Transport Detail
-            </h4>
-            <div className="grid grid-cols-2 gap-3.5 mb-5 max-[560px]:grid-cols-1">
-              <Field label="Truck Weight (kg)">
-                <input type="number" min="0" step="0.01" className={inputCls} value={header.truck_weight_kg}
-                  onChange={(e) => setHeader((h) => ({ ...h, truck_weight_kg: e.target.value }))} />
-              </Field>
-              <Field label="Truck No.">
+              <Field label="Truck No." hint="once for the whole truck">
                 <input className={inputCls} value={header.truck_no}
                   onChange={(e) => setHeader((h) => ({ ...h, truck_no: e.target.value }))}
                   placeholder="BA 1 KHA 1234" />
               </Field>
-              <Field label="Driver Name">
-                <input className={inputCls} value={header.truck_driver}
-                  onChange={(e) => setHeader((h) => ({ ...h, truck_driver: e.target.value }))} />
-              </Field>
-              <Field label="Driver No.">
-                <input className={inputCls} value={header.truck_driver_phone}
-                  onChange={(e) => setHeader((h) => ({ ...h, truck_driver_phone: e.target.value }))} />
-              </Field>
-              <Field label="From">
-                <input className={inputCls} value={header.from_location}
-                  onChange={(e) => setHeader((h) => ({ ...h, from_location: e.target.value }))} />
-              </Field>
-              <Field label="To">
-                <input className={inputCls} value={header.to_location}
-                  onChange={(e) => setHeader((h) => ({ ...h, to_location: e.target.value }))} />
-              </Field>
-              <Field label="Loader Name">
-                <input className={inputCls} value={header.loader_name}
-                  onChange={(e) => setHeader((h) => ({ ...h, loader_name: e.target.value }))} />
-              </Field>
-              <Field label="Transport Fee (Rs)">
-                <input type="number" min="0" step="0.01" className={inputCls} value={header.transport_fee}
-                  onChange={(e) => setHeader((h) => ({ ...h, transport_fee: e.target.value }))} />
-              </Field>
-              <Field label="Labor Charge (Rs)">
-                <input type="number" min="0" step="0.01" className={inputCls} value={header.labor_charge}
-                  onChange={(e) => setHeader((h) => ({ ...h, labor_charge: e.target.value }))} />
-              </Field>
-              <Field label="Road Expenses (Rs)">
-                <input type="number" min="0" step="0.01" className={inputCls} value={header.road_expense}
-                  onChange={(e) => setHeader((h) => ({ ...h, road_expense: e.target.value }))} />
-              </Field>
-              <Field label="Tax Paid (G.B.S.E) (Rs)">
-                <input type="number" min="0" step="0.01" className={inputCls} value={header.tax_gbse}
-                  onChange={(e) => setHeader((h) => ({ ...h, tax_gbse: e.target.value }))} />
-              </Field>
-              <Field label="Total Transport Cost" hint="(fee + labor + road + tax)">
-                <div className={inputCls + " !bg-steel-tint !text-steel-dark font-semibold"}>
-                  {rupees(headerTransportTotal(header))}
-                </div>
-              </Field>
             </div>
 
             {/* ============ PURCHASE LINES ============ */}
-            <h4 className="text-[13.5px] font-semibold mb-2 pt-4 border-t border-dashed border-line">
-              Purchases on this trip
-            </h4>
-            <p className="text-[11.5px] text-ink-faint bg-surface-sunken rounded-sm px-3 py-2 mb-4">
-              Add one line per material/supplier. Each line gets its own invoice number. The truck &amp; transport above is shared.
-            </p>
-
             {lines.map((line, i) => {
               const c = lineComputed(line);
               return (
@@ -779,21 +914,15 @@ export default function Purchases() {
                   </div>
 
                   <div className="grid grid-cols-2 gap-3.5 mb-3.5 max-[560px]:grid-cols-1">
-                    <Field label="Invoice #">
+                    <Field label="Invoice #" span={2}>
                       <input className={inputCls} value={line.invoice} required
                         onChange={(e) => patchLine(i, { invoice: e.target.value })} />
                     </Field>
-                    <Field label="Status">
-                      <select className={selectCls} value={line.status}
-                        onChange={(e) => patchLine(i, { status: e.target.value })}>
-                        <option value="Delivered">Delivered</option>
-                        <option value="Pending">Pending</option>
-                      </select>
-                    </Field>
+
                     <Field label="Supplier" span={2}>
                       <select className={selectCls} value={line.supplier_id} required
                         onChange={(e) => patchLine(i, { supplier_id: e.target.value })}>
-                        <option value="">— select —</option>
+                        <option value="">Supplier / company name</option>
                         {suppliers.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
                       </select>
                     </Field>
@@ -804,36 +933,41 @@ export default function Purchases() {
                     </Field>
                     <Field label="Phone Number">
                       <input className={inputCls} value={line.contact_phone}
-                        onChange={(e) => patchLine(i, { contact_phone: e.target.value })}
+                        inputMode="numeric"
+                        pattern="[0-9]*"
+                        maxLength={10}
+                        onChange={(e) => {
+                          const digits = e.target.value.replace(/\D/g, "").slice(0, 10);
+                          patchLine(i, { contact_phone: digits });
+                        }}
                         placeholder="98XXXXXXXX" />
                     </Field>
 
-                    <Field label="Material">
+                    <Field label="Material" span={2}>
                       <input className={inputCls} value={line.material} required
                         placeholder="e.g. TMT Rod 12mm"
                         onChange={(e) => patchLine(i, { material: e.target.value })} />
                     </Field>
-                    <div />
 
-                    <Field label="Gross Qty (kg)">
+                    <Field label="Gross Quantity (kg)">
                       <input type="number" min="0" step="0.001" className={inputCls} value={line.gross_qty} required
                         onChange={(e) => patchLine(i, { gross_qty: e.target.value })} />
                     </Field>
-                    <Field label="Dust (kg)">
+                    <Field label="Report Amount (kg)">
                       <input type="number" min="0" step="0.001" className={inputCls} value={line.dust_qty}
                         onChange={(e) => patchLine(i, { dust_qty: e.target.value })} />
                     </Field>
-                    <Field label="Net Qty (computed)">
+                    <Field label="Net Quantity">
                       <div className={inputCls + " !bg-steel-tint !text-steel-dark font-semibold"}>
                         {kg(c.net)}
                       </div>
                     </Field>
-                    <Field label="Rate (Rs/kg)">
+                    <Field label="Rate (Rs / kg net)">
                       <input type="number" min="0" step="0.01" className={inputCls} value={line.rate} required
                         onChange={(e) => patchLine(i, { rate: e.target.value })} />
                     </Field>
 
-                    <Field label="Total (line amount)" span={2}>
+                    <Field label="Total (real product amount)" span={2}>
                       <div className={inputCls + " !bg-steel-tint !text-steel-dark font-semibold !text-[15px]"}>
                         {rupees(c.total)}
                       </div>
@@ -852,23 +986,10 @@ export default function Purchases() {
                             <option value="Online">Online</option>
                           </select>
                         </Field>
-                        <Field label="Cash Source">
-                          <input className={inputCls} value={line.cash_source}
-                            onChange={(e) => patchLine(i, { cash_source: e.target.value })}
-                            placeholder="e.g. Office cash / Bank" />
-                        </Field>
-                        <Field label="Due After This">
+                        <Field label="Due After This" span={2}>
                           <div className={inputCls + " !bg-steel-tint !text-steel-dark font-semibold"}>
                             {rupees(c.due)}
                           </div>
-                        </Field>
-                        <Field label="Paid By">
-                          <input className={inputCls} value={line.paid_by}
-                            onChange={(e) => patchLine(i, { paid_by: e.target.value })} />
-                        </Field>
-                        <Field label="Signature / Received By">
-                          <input className={inputCls} value={line.signature}
-                            onChange={(e) => patchLine(i, { signature: e.target.value })} />
                         </Field>
                       </>
                     )}
@@ -883,7 +1004,7 @@ export default function Purchases() {
                   + Add Another Purchase
                 </Button>
                 <span className="text-[12px] text-ink-faint">
-                  Same truck, different supplier? Add it here — the truck &amp; transport details above are shared.
+                  Same truck, different supplier? Add it here — the date, status, company and truck number above are shared.
                 </span>
               </div>
             )}
@@ -915,9 +1036,9 @@ export default function Purchases() {
 }
 
 /* ------------------------------------------------------------------------- */
-function DetailPair({ label, value }) {
+function DetailPair({ label, value, span }) {
   return (
-    <div>
+    <div className={span === 2 ? "col-span-2 max-[560px]:col-span-1" : ""}>
       <div className="text-[11.5px] text-ink-faint mb-0.5">{label}</div>
       <div className="text-[13.5px] font-medium">{value}</div>
     </div>
@@ -925,8 +1046,7 @@ function DetailPair({ label, value }) {
 }
 
 /* -------------------------------------------------------------------------
-   EditPaymentBlock — payments sub-panel shown inside the Edit Purchase modal
-   (outside the purchase form). Logs additional purchase payments.
+   EditPaymentBlock — payments sub-panel shown inside the Edit Purchase modal.
    ------------------------------------------------------------------------- */
 function EditPaymentBlock({ purchase, supplierName, onPaid }) {
   const [open, setOpen] = useState(false);

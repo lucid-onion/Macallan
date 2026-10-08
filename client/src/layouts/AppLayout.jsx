@@ -45,7 +45,7 @@ export default function AppLayout() {
             <img src="/logo.png" alt="" className="max-w-full max-h-full object-contain block" />
           </div>
           <div>
-            <div className="text-white font-semibold text-[14.5px] leading-tight">ASN Demolition</div>
+            <div className="text-white font-semibold text-[14.5px] leading-tight">ScrapLink</div>
             <div className="text-sidebar-text text-[11.5px]">Inventory &amp; Sales</div>
           </div>
         </div>
@@ -88,7 +88,7 @@ export default function AppLayout() {
           <Outlet />
         </div>
         <footer className="px-9 pt-[18px] pb-[34px] text-ink-faint text-xs">
-          ASN Demolition Pvt.Ltd — internal management system.
+          ScrapLink Pvt.Ltd — internal management system.
         </footer>
       </div>
     </div>

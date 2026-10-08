@@ -100,7 +100,7 @@ export default function Reports() {
     const cols = Math.max(headers.length, 2);
 
     const banner = [
-      "ASN Demolition Pvt.Ltd",
+      "ScrapLink Pvt.Ltd",
       branchLabel ? `Company: ${branchLabel}` : null,
       title,
       `Year: ${year || "All"}${month ? ` · Month: ${month}` : ""}${day ? ` · Day: ${day}` : ""}`,
@@ -153,7 +153,7 @@ export default function Reports() {
       alert("This report isn't tagged by company. Use Export to Excel instead.");
       return;
     }
-    const list = companies.length ? companies : ["ASN Demolition Pvt.Ltd"];
+    const list = companies.length ? companies : ["ScrapLink Pvt.Ltd"];
     const wb = XLSX.utils.book_new();
     let added = 0;
 
@@ -194,7 +194,7 @@ export default function Reports() {
   return (
     <>
       <div className="print-only">
-        <h1>ASN Demolition Pvt.Ltd</h1>
+        <h1>ScrapLink Pvt.Ltd</h1>
         <div className="meta">
           <strong>{report.title}</strong> · Period: {year || "All"}
           {month ? ` / ${month}` : ""}

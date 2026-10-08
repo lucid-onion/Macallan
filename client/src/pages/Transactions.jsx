@@ -118,7 +118,7 @@ export default function Transactions() {
   /* ---------- Print ---------- */
   function printTransactionVoucher(p) {
     const meta = metaForPayment(p);
-    const company = p.company || "ASN Demolition Pvt.Ltd";
+    const company = p.company || "ScrapLink Pvt.Ltd";
     printVoucher(`
       <div class="voucher-sheet">
         <div class="voucher-head">
@@ -164,7 +164,7 @@ export default function Transactions() {
       date_bs_month: bsToday().month,
       date_bs_day:   bsToday().day,
       date_ad:       new Date().toISOString().slice(0, 10),
-      company: "ASN Demolition Pvt.Ltd",
+      company: "ScrapLink Pvt.Ltd",
       note: "",
     });
     setFormError(null);

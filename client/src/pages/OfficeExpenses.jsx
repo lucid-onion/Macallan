@@ -20,7 +20,7 @@ const EMPTY_FORM = {
   date_bs_month: todayBs.month,
   date_bs_day:   todayBs.day,
   date_ad:       bsToAdString(todayBs),
-  company: "ASN Demolition Pvt.Ltd",
+  company: "ScrapLink Pvt.Ltd",
   note: "",
   items: [{ description: "", amount: "" }],
 };
@@ -200,7 +200,7 @@ export default function OfficeExpenses() {
 
   /* ---------- Print ---------- */
   function printOfficeExpense(row) {
-    const company = row.company || "ASN Demolition Pvt.Ltd";
+    const company = row.company || "ScrapLink Pvt.Ltd";
     const html = `
       <div class="voucher-sheet">
         <div class="voucher-head">

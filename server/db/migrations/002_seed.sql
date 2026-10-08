@@ -71,7 +71,7 @@ SELECT t.id, p.id FROM teams t JOIN permissions p ON (
 
 -- Default settings
 INSERT INTO settings (key, value) VALUES
-  ('company', '{"name":"ASN Demolition Pvt.Ltd","logo":"","openingBalance":0,"theme":"light"}'::jsonb)
+  ('company', '{"name":"ScrapLink Pvt.Ltd","logo":"","openingBalance":0,"theme":"light"}'::jsonb)
 ON CONFLICT (key) DO NOTHING;
 
 -- Bootstrap super admin (password: ChangeMe123!) — change on first login.

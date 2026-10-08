@@ -1,5 +1,5 @@
 -- ============================================================================
--- ASN Demolition ERP — core schema
+-- ScrapLink ERP — core schema
 -- Roles, teams, permissions, team-based permission inheritance, user accounts,
 -- plus the business modules (inventory, purchases, sales, transportation,
 -- suppliers, customers, transactions, office_expenses, demolition).

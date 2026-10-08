@@ -275,7 +275,7 @@ export default function Suppliers() {
                   <dl className="flex flex-col gap-2 m-0 mb-3">
                     <StatLine label="Purchases" value={rupees(s.total)} />
                     <StatLine label="Steel (Net)" value={kg(s.qty)} />
-                    <StatLine label="Transport" value={rupees(s.transportCost)} />
+                    {/* <StatLine label="Transport" value={rupees(s.transportCost)} /> */}
                     <StatLine label="Loads" value={String(s.loads)} />
                   </dl>
 
