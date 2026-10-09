@@ -1,26 +1,17 @@
 /* ==========================================================================
-   transportation.js — deliveries.
+   transportation.js — standalone delivery log.
 
-   Money model:
-     amount           = load_kg × rate
-     balance_after_adv= max(0, amount − advance)
-     trip_cost        = balance_after_adv + labor_charge + road_expense + tax_gbse
-     paid_to_driver   = advance + sum(additional payments)
-     balance_due      = max(0, trip_cost − additional_payments)
+   Fully decoupled from purchases and sales. Every delivery records who it
+   was for (free-text customer + invoice ref), vehicle/driver/route/load/rate,
+   and its own payment installments (advance + additional payments to driver).
 
-   Aliases kept so the current client keeps rendering:
-     total_cost            = trip_cost
-     total_balance_due     = balance_due
-     driver_balance        = balance_due
-     balance_after_advance = amount − advance
+   Money:
+     amount         = load_kg × rate
+     trip_cost      = amount + labor_charge + road_expense + tax_gbse
+     paid_to_driver = advance + sum(additional payments)
+     balance_due    = max(0, trip_cost − advance − additional_payments)
 
-   Installment numbering:
-     The advance is installment #1. Each additional payment auto-labels as
-     "Second installment", "Third installment", … unless the caller supplies
-     an explicit note.
-
-   Driver advance and additional payments NEVER write into the transactions
-   ledger. They live only inside transportation.
+   Payments NEVER write to the transactions ledger.
    ========================================================================== */
 import { z } from "zod";
 import { Router } from "express";
@@ -33,9 +24,6 @@ import { notFound } from "../../utils/errors.js";
 const router = Router();
 router.use(requireAuth);
 
-/* -------------------------------------------------------------------------- */
-/* Ordinals — 1 = advance, 2 = Second installment, 3 = Third installment …    */
-/* -------------------------------------------------------------------------- */
 const ORDINALS = [
   "", "First", "Second", "Third", "Fourth", "Fifth", "Sixth",
   "Seventh", "Eighth", "Ninth", "Tenth", "Eleventh", "Twelfth",
@@ -47,9 +35,8 @@ const installmentLabel = (n) => `${ordinal(n)} installment`;
 /* Schema                                                                     */
 /* -------------------------------------------------------------------------- */
 const schema = z.object({
-  link_type:     z.enum(["purchase","customer"]).nullable().optional(),
-  trip_id:       z.string().uuid().nullable().optional(),
   customer_name: z.string().max(120).nullable().optional(),
+  invoice:       z.string().max(60).nullable().optional(),
   vehicle:       z.string().max(60).optional(),
   driver:        z.string().max(120).optional(),
   driver_phone:  z.string().max(40).optional(),
@@ -80,7 +67,7 @@ const paymentSchema = z.object({
 });
 
 /* -------------------------------------------------------------------------- */
-/* Shared computation                                                         */
+/* Decorator                                                                  */
 /* -------------------------------------------------------------------------- */
 function decorate(r) {
   const load  = Number(r.load_kg)      || 0;
@@ -92,25 +79,23 @@ function decorate(r) {
   const paidAdditional = Number(r.payments_total) || 0;
 
   const amount          = load * rate;
-  const tripCost    = amount + labor + road + tax;      // true total cost
-  const paidToDriver = adv + paidAdditional;            // advance + everything else
-  const balanceDue   = Math.max(0, tripCost - paidToDriver);
+  const balanceAfterAdv = Math.max(0, amount - adv);
+  const tripCost        = amount + labor + road + tax;
+  const paidToDriver    = adv + paidAdditional;
+  const balanceDue      = Math.max(0, tripCost - paidToDriver);
 
   return {
     ...r,
     payments_total: paidAdditional,
-
-    // New names
     amount,
     trip_cost:       tripCost,
     paid_to_driver:  paidToDriver,
     balance_due:     balanceDue,
-
-    // Old names — kept so the current client + print keep rendering
+    // aliases
     total_cost:            tripCost,
     total_balance_due:     balanceDue,
     driver_balance:        balanceDue,
-    balance_after_advance: Math.max(0, amount - adv),
+    balance_after_advance: balanceAfterAdv,
   };
 }
 
@@ -180,8 +165,8 @@ router.post("/", requirePermission("transportation", "create"), async (req, res,
     );
 
     await audit(req, "transport.create", "transport", rows[0].id, {
-      link_type: input.link_type || null,
-      trip_id: input.trip_id || null,
+      customer_name: input.customer_name || null,
+      invoice:       input.invoice || null,
     });
     res.status(201).json({ item: decorate(rows[0]) });
   } catch (e) { next(e); }

@@ -1,18 +1,18 @@
 /* ==========================================================================
-   Transportation.jsx — deliveries.
+   Transportation.jsx — standalone delivery log.
 
-   Money model:
+   Each record is a self-contained delivery with:
+     - Customer name + invoice ref (free text)
+     - Vehicle / driver / loader / route / load / rate
+     - Advance + additional payments (installments)
+
+   Money:
      total_amount     = load_kg × rate
-     balance_after_adv= max(0, total_amount − advance)
-     trip_cost        = balance_after_adv + labor + road + tax
+     trip_cost        = total_amount + labor + road + tax
      paid_to_driver   = advance + sum(additional payments)
-     total_cost_due   = max(0, trip_cost − additional payments)
-
-   Driver advance and additional payments NEVER write into the transactions
-   ledger. They live only inside transportation.
+     total_cost_due   = max(0, trip_cost − advance − additional payments)
    ========================================================================== */
 import { useEffect, useMemo, useState } from "react";
-import { useSearchParams } from "react-router-dom";
 import { api } from "../api/client";
 import { useAuth } from "../auth/AuthContext";
 import {
@@ -27,9 +27,8 @@ const BRAND = "ScrapLink Pvt.Ltd";
 const todayBs = bsToday();
 
 const EMPTY_FORM = {
-  link_type:     "customer",
-  trip_id:       "",
   customer_name: "",
+  invoice:       "",
   vehicle:       "",
   driver:        "",
   driver_phone:  "",
@@ -69,17 +68,12 @@ export default function Transportation() {
   const canUpdate = has("transportation", "update");
   const canDel    = canDelete("transportation");
 
-  const [searchParams] = useSearchParams();
-  const tripIdFromUrl = searchParams.get("trip_id") || "";
-
   const [rows, setRows] = useState([]);
-  const [trips, setTrips] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
 
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState("");
-  const [linkFilter, setLinkFilter] = useState("");
 
   const [showForm, setShowForm] = useState(false);
   const [editing, setEditing] = useState(null);
@@ -91,34 +85,11 @@ export default function Transportation() {
   const [toDelete, setToDelete] = useState(null);
   const [deleting, setDeleting] = useState(false);
 
-  /* ---------- Load ---------- */
   async function load() {
     setLoading(true); setError(null);
     try {
-      const [t, p] = await Promise.all([
-        api.get("/api/transportation"),
-        api.get("/api/purchases"),
-      ]);
+      const t = await api.get("/api/transportation");
       setRows(t.items || []);
-
-      const byTrip = new Map();
-      (p.items || []).forEach((row) => {
-        if (!row.trip_id) return;
-        const key = row.trip_id;
-        if (!byTrip.has(key)) {
-          byTrip.set(key, {
-            trip_id: key,
-            invoices: [],
-            totalLoad: 0,
-            truck_no: row.truck_no || "",
-          });
-        }
-        const tr = byTrip.get(key);
-        tr.invoices.push(row.invoice);
-        tr.totalLoad += Number(row.net_qty) || 0;
-        if (!tr.truck_no && row.truck_no) tr.truck_no = row.truck_no;
-      });
-      setTrips([...byTrip.values()]);
     } catch (e) {
       setError(e.message || "Failed to load deliveries");
     } finally {
@@ -127,7 +98,6 @@ export default function Transportation() {
   }
   useEffect(() => { load(); }, []);
 
-  /* ---------- Live computed (form) ---------- */
   const computed = useMemo(() => {
     const amount   = num(form.load_kg) * num(form.rate);
     const advance  = num(form.advance);
@@ -135,11 +105,10 @@ export default function Transportation() {
     const road     = num(form.road_expense);
     const tax      = num(form.tax_gbse);
     const balance  = Math.max(0, amount - advance);
-    const tripCost = balance + labor + road + tax;
+    const tripCost = amount + labor + road + tax;
     return { amount, advance, balance, tripCost };
   }, [form.load_kg, form.rate, form.advance, form.labor_charge, form.road_expense, form.tax_gbse]);
 
-  /* ---------- BS ↔ AD sync ---------- */
   useEffect(() => {
     if (!showForm) return;
     const y = Number(form.date_bs_year);
@@ -153,60 +122,38 @@ export default function Transportation() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [form.date_bs_year, form.date_bs_month, form.date_bs_day, showForm]);
 
-  /* ---------- Filters ---------- */
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
     return rows.filter((r) => {
       if (statusFilter && r.status !== statusFilter) return false;
-      if (linkFilter && r.link_type !== linkFilter) return false;
       if (!q) return true;
       return (
+        (r.customer_name || "").toLowerCase().includes(q) ||
+        (r.invoice || "").toLowerCase().includes(q) ||
         (r.vehicle || "").toLowerCase().includes(q) ||
         (r.driver || "").toLowerCase().includes(q) ||
         (r.loader || "").toLowerCase().includes(q) ||
         (r.from_location || "").toLowerCase().includes(q) ||
-        (r.to_location || "").toLowerCase().includes(q) ||
-        (r.customer_name || "").toLowerCase().includes(q)
+        (r.to_location || "").toLowerCase().includes(q)
       );
     });
-  }, [rows, search, statusFilter, linkFilter]);
+  }, [rows, search, statusFilter]);
 
   const stats = useMemo(() => {
     const totalCost = rows.reduce((s, r) => s + num(r.trip_cost ?? r.total_cost), 0);
-  
-    const totalPaid = rows.reduce(
-      (s, r) => s + num(r.advance) + num(r.payments_total),
-      0
-    );
-  
-    const totalLeft = rows.reduce(
-      (s, r) => s + num(r.total_balance_due ?? r.balance_due),
-      0
-    );
-  
+    const totalLeft = rows.reduce((s, r) => s + num(r.total_balance_due ?? r.balance_due), 0);
+    const totalPaid = rows.reduce((s, r) => s + num(r.advance) + num(r.payments_total), 0);
     return [
-      { label: "Total Deliveries",   value: String(rows.length) },
-      { label: "Total Left to Pay",  value: rupees(totalLeft) },
-      { label: "Total Paid",         value: rupees(totalPaid) },
-      { label: "Total Cost",         value: rupees(totalCost) },
+      { label: "Total Deliveries",  value: String(rows.length) },
+      { label: "Total Left to Pay", value: rupees(totalLeft) },
+      { label: "Total Paid",        value: rupees(totalPaid) },
+      { label: "Total Cost",        value: rupees(totalCost) },
     ];
   }, [rows]);
 
-  /* ---------- Form open/close ---------- */
   function openCreate() {
     setEditing(null);
-
-    const preTrip = tripIdFromUrl
-      ? trips.find((t) => t.trip_id === tripIdFromUrl)
-      : null;
-
-    setForm({
-      ...EMPTY_FORM,
-      link_type: preTrip ? "purchase" : "customer",
-      trip_id: preTrip ? preTrip.trip_id : "",
-      vehicle: preTrip?.truck_no || "",
-      load_kg: preTrip ? String(preTrip.totalLoad) : "",
-    });
+    setForm({ ...EMPTY_FORM });
     setFormError(null);
     setShowForm(true);
   }
@@ -214,9 +161,8 @@ export default function Transportation() {
   function openEdit(row) {
     setEditing(row);
     setForm({
-      link_type:     row.link_type || "customer",
-      trip_id:       row.trip_id || "",
       customer_name: row.customer_name || "",
+      invoice:       row.invoice || "",
       vehicle:       row.vehicle || "",
       driver:        row.driver || "",
       driver_phone:  row.driver_phone || "",
@@ -239,7 +185,6 @@ export default function Transportation() {
     setShowForm(true);
   }
 
-  /* ---------- Save ---------- */
   async function save(e) {
     e.preventDefault();
     setSaving(true);
@@ -247,11 +192,8 @@ export default function Transportation() {
 
     try {
       const payload = {
-        link_type:     form.link_type,
-        trip_id:       form.link_type === "purchase" && form.trip_id ? form.trip_id : null,
-        customer_name: form.link_type === "customer" && form.customer_name.trim()
-          ? form.customer_name.trim()
-          : null,
+        customer_name: form.customer_name.trim() || null,
+        invoice:       form.invoice.trim()       || null,
         vehicle:       form.vehicle.trim()       || undefined,
         driver:        form.driver.trim()        || undefined,
         driver_phone:  form.driver_phone.trim()  || undefined,
@@ -270,15 +212,6 @@ export default function Transportation() {
         date_ad:       form.date_ad,
         status:        form.status,
       };
-
-      if (form.link_type === "purchase" && !payload.trip_id) {
-        setFormError("Pick a purchase trip, or switch Linked-to to Customer.");
-        setSaving(false); return;
-      }
-      if (form.link_type === "customer" && !payload.customer_name) {
-        setFormError("Enter a customer name, or switch Linked-to to Purchase.");
-        setSaving(false); return;
-      }
 
       if (editing) await api.patch(`/api/transportation/${editing.id}`, payload);
       else         await api.post("/api/transportation", payload);
@@ -306,39 +239,32 @@ export default function Transportation() {
     }
   }
 
-  /* ---------- Print ---------- */
   async function printTransportVoucher(row) {
     const company = BRAND;
-    const linkLabel =
-      row.link_type === "purchase"
-        ? `Purchase trip`
-        : row.customer_name || "Customer";
 
-    // Fetch the individual payments so each installment prints as its own line.
     let payments = [];
     try {
       const { items } = await api.get(`/api/transportation/${row.id}/payments`);
       payments = items || [];
     } catch { payments = []; }
 
-    // Advance = First installment, then each additional payment is the next one.
     const installmentLines = [
-      {
-        label: "First installment (Advance)",
-        amount: num(row.advance || 0),
-      },
+      { label: "First installment (Advance)", amount: num(row.advance || 0) },
       ...payments.map((p, i) => ({
-        label: p.note || `${ORDINALS[i + 2] || "#" + (i + 2)} installment`,
+        label: p.note || `${ordinal(i + 2)} installment`,
         amount: num(p.amount),
       })),
     ].filter((l) => l.amount > 0);
 
-    const totalPaid    = installmentLines.reduce((s, l) => s + l.amount, 0);
-    const totalCost    = num(row.trip_cost ?? row.total_cost);
-    const totalCostDue = Math.max(0, totalCost - totalPaid);
+    const totalPaid = installmentLines.reduce((s, l) => s + l.amount, 0);
+    const tripCost  = num(row.trip_cost ?? row.total_cost);
+    const totalCostDue = Math.max(0, tripCost - totalPaid);
 
-    const installmentRows = installmentLines.map((l) => `
-      <div><span>${esc(l.label)}</span><span>${esc(rupees(l.amount))}</span></div>
+    const installmentRows = installmentLines.map((l, i) => `
+      <div>
+        <span>${i + 1}. ${esc(l.label)}</span>
+        <span>${esc(rupees(l.amount))}</span>
+      </div>
     `).join("");
 
     printVoucher(`
@@ -356,14 +282,15 @@ export default function Transportation() {
         <div class="doc-meta">
           <div>Date (BS)<strong>${esc(formatBs(row))}</strong></div>
           <div>Date (English)<strong>${esc(adStr(row))}</strong></div>
-          <div>Linked To<strong>${esc(row.link_type === "purchase" ? "Purchase" : "Customer")}</strong></div>
-          <div>Status<strong>${esc(row.status || "Delivered")}</strong></div>
+          <div>Customer<strong>${esc(row.customer_name || "—")}</strong></div>
+          <div>Invoice<strong>${esc(row.invoice || "—")}</strong></div>
         </div>
 
         <div class="doc-two-col">
           <div class="doc-box">
-            <div class="doc-box-title">${row.link_type === "purchase" ? "Purchase Trip" : "Customer"}</div>
-            <div class="doc-box-main">${esc(linkLabel)}</div>
+            <div class="doc-box-title">Customer</div>
+            <div class="doc-box-main">${esc(row.customer_name || "—")}</div>
+            ${row.invoice ? `<div class="doc-box-sub">Invoice: ${esc(row.invoice)}</div>` : ""}
           </div>
           <div class="doc-box">
             <div class="doc-box-title">Route</div>
@@ -388,7 +315,7 @@ export default function Transportation() {
           <div><span>Labor Charge</span><span>${esc(rupees(row.labor_charge || 0))}</span></div>
           <div><span>Road Expenses</span><span>${esc(rupees(row.road_expense || 0))}</span></div>
           <div><span>Tax (G.B.S.E)</span><span>${esc(rupees(row.tax_gbse || 0))}</span></div>
-          <div class="doc-summary-strong"><span>Total Cost</span><span>${esc(rupees(totalCost))}</span></div>
+          <div class="doc-summary-strong"><span>Total Cost</span><span>${esc(rupees(tripCost))}</span></div>
         </div>
 
         ${installmentLines.length ? `
@@ -415,14 +342,13 @@ export default function Transportation() {
       </div>`);
   }
 
-  /* ---------- Table columns ---------- */
   const columns = [
     { key: "date_bs", label: "Date (BS)", render: (r) => formatBs(r) },
     { key: "date_ad", label: "Date (EN)", render: (r) => adStr(r) },
-    { key: "linked", label: "Linked To", render: (r) =>
-      r.link_type === "purchase"
-        ? <Badge variant="neutral">Purchase</Badge>
-        : <span>{r.customer_name || "—"}</span> },
+    { key: "customer_name", label: "Customer",
+      render: (r) => r.customer_name || "—" },
+    { key: "invoice", label: "Invoice",
+      render: (r) => r.invoice || "—" },
     { key: "vehicle", label: "Vehicle", render: (r) => r.vehicle || "—" },
     { key: "driver", label: "Driver", render: (r) => r.driver || "—" },
     { key: "driver_phone", label: "Driver Phone", render: (r) => r.driver_phone || "—" },
@@ -470,7 +396,6 @@ export default function Transportation() {
         actions={canCreate ? <Button variant="primary" onClick={openCreate}>+ New Delivery</Button> : null}
       />
 
-      {/* Stats */}
       <div className="grid grid-cols-4 gap-3 mb-[18px] max-[980px]:grid-cols-2 max-[520px]:grid-cols-1">
         {stats.map((s, i) => (
           <div key={i} className="bg-surface-sunken border border-line-soft rounded-sm px-3.5 py-[13px]">
@@ -480,19 +405,10 @@ export default function Transportation() {
         ))}
       </div>
 
-      {/* Filters */}
       <div className="flex items-center gap-2 flex-wrap bg-surface border border-line rounded-md p-2.5 mb-6">
         <label htmlFor="tr-search" className="text-xs text-ink-faint pl-1">Search</label>
         <input id="tr-search" value={search} onChange={(e) => setSearch(e.target.value)}
-          placeholder="Vehicle, driver, route, customer" className={inputCls + " !w-64"} />
-
-        <label htmlFor="tr-link" className="text-xs text-ink-faint pl-1">Linked</label>
-        <select id="tr-link" value={linkFilter} onChange={(e) => setLinkFilter(e.target.value)}
-          className={selectCls + " !w-auto"}>
-          <option value="">All</option>
-          <option value="purchase">Purchase</option>
-          <option value="customer">Customer</option>
-        </select>
+          placeholder="Customer, invoice, vehicle, driver, route" className={inputCls + " !w-64"} />
 
         <label htmlFor="tr-status" className="text-xs text-ink-faint pl-1">Status</label>
         <select id="tr-status" value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)}
@@ -528,7 +444,6 @@ export default function Transportation() {
         />
       )}
 
-      {/* Detail modal */}
       {detail && (
         <Modal
           title={`Delivery Detail — ${detail.vehicle || "—"}`}
@@ -542,12 +457,8 @@ export default function Transportation() {
           }
         >
           <div className="grid grid-cols-2 gap-x-5 gap-y-2.5 mb-4 max-[560px]:grid-cols-1">
-            <DetailPair label="Linked To"
-              value={detail.link_type === "purchase" ? "Purchase" : "Customer"} />
-            <DetailPair label={detail.link_type === "purchase" ? "Trip" : "Customer"}
-              value={detail.link_type === "purchase"
-                ? (detail.trip_id ? detail.trip_id.slice(0, 8) + "…" : "—")
-                : (detail.customer_name || "—")} />
+            <DetailPair label="Customer" value={detail.customer_name || "—"} />
+            <DetailPair label="Invoice" value={detail.invoice || "—"} />
             <DetailPair label="Date (BS)" value={formatBs(detail)} />
             <DetailPair label="Date (EN)" value={adStr(detail)} />
             <DetailPair label="Vehicle No." value={detail.vehicle || "—"} />
@@ -572,7 +483,6 @@ export default function Transportation() {
         </Modal>
       )}
 
-      {/* Create / edit modal */}
       {showForm && (
         <Modal
           title={editing ? "Edit Delivery" : "New Delivery"}
@@ -594,55 +504,20 @@ export default function Transportation() {
               </div>
             )}
 
-            {/* ============ LINK ============ */}
-            <h4 className="text-[13.5px] font-semibold mb-3">Link</h4>
+            <h4 className="text-[13.5px] font-semibold mb-3">Customer</h4>
             <div className="grid grid-cols-2 gap-3.5 mb-5 max-[560px]:grid-cols-1">
-              <Field label="Linked to">
-                <select className={selectCls} value={form.link_type}
-                  onChange={(e) => setForm((f) => ({
-                    ...f,
-                    link_type: e.target.value,
-                    trip_id: "",
-                    customer_name: "",
-                  }))}>
-                  <option value="customer">Customer</option>
-                  <option value="purchase">Purchase</option>
-                </select>
+              <Field label="Customer" span={2}>
+                <input className={inputCls} value={form.customer_name}
+                  onChange={(e) => setForm((f) => ({ ...f, customer_name: e.target.value }))}
+                  placeholder="Customer / company name" />
               </Field>
-
-              {form.link_type === "purchase" && (
-                <Field label="Purchase trip">
-                  <select className={selectCls} value={form.trip_id}
-                    onChange={(e) => {
-                      const tid = e.target.value;
-                      const trip = trips.find((t) => t.trip_id === tid);
-                      setForm((f) => ({
-                        ...f,
-                        trip_id: tid,
-                        vehicle: trip?.truck_no || f.vehicle,
-                        load_kg: trip ? String(trip.totalLoad) : f.load_kg,
-                      }));
-                    }}>
-                    <option value="">— select purchase trip —</option>
-                    {trips.map((t) => (
-                      <option key={t.trip_id} value={t.trip_id}>
-                        {t.invoices.join(", ")} · {t.totalLoad.toLocaleString("en-IN")} kg
-                      </option>
-                    ))}
-                  </select>
-                </Field>
-              )}
-
-              {form.link_type === "customer" && (
-                <Field label="Customer">
-                  <input className={inputCls} value={form.customer_name}
-                    onChange={(e) => setForm((f) => ({ ...f, customer_name: e.target.value }))}
-                    placeholder="Customer / company name" />
-                </Field>
-              )}
+              <Field label="Invoice" span={2}>
+                <input className={inputCls} value={form.invoice}
+                  onChange={(e) => setForm((f) => ({ ...f, invoice: e.target.value }))}
+                  placeholder="Invoice / bill no." />
+              </Field>
             </div>
 
-            {/* ============ ROUTE & VEHICLE ============ */}
             <h4 className="text-[13.5px] font-semibold mb-3 pt-4 border-t border-dashed border-line">
               Route &amp; Vehicle
             </h4>
@@ -701,7 +576,6 @@ export default function Transportation() {
               </Field>
             </div>
 
-            {/* ============ DATES ============ */}
             <h4 className="text-[13.5px] font-semibold mb-3 pt-4 border-t border-dashed border-line">
               Dates
             </h4>
@@ -737,7 +611,6 @@ export default function Transportation() {
               </Field>
             </div>
 
-            {/* ============ COSTS ============ */}
             <h4 className="text-[13.5px] font-semibold mb-3 pt-4 border-t border-dashed border-line">
               Costs
             </h4>
@@ -763,7 +636,7 @@ export default function Transportation() {
                 <input type="number" min="0" step="0.01" className={inputCls} value={form.tax_gbse}
                   onChange={(e) => setForm((f) => ({ ...f, tax_gbse: e.target.value }))} />
               </Field>
-              <Field label="Total Cost" hint="balance after advance + labor + road + tax">
+              <Field label="Total Cost" hint="amount + labor + road + tax">
                 <div className={inputCls + " !bg-positive-tint !text-positive font-semibold"}>
                   {rupees(computed.tripCost)}
                 </div>
@@ -771,7 +644,6 @@ export default function Transportation() {
             </div>
           </form>
 
-          {/* Payments sub-panel (edit only) */}
           {editing && (
             <div className="mt-5">
               <DriverPaymentsBlock
@@ -799,7 +671,6 @@ export default function Transportation() {
   );
 }
 
-/* ------------------------------------------------------------------------- */
 function DetailPair({ label, value }) {
   return (
     <div>
@@ -809,16 +680,7 @@ function DetailPair({ label, value }) {
   );
 }
 
-/* -------------------------------------------------------------------------
-   DriverPaymentsBlock — payments log for one delivery.
-
-   Money:
-     trip_cost      = (amount − advance) + labor + road + tax
-     total_cost_due = max(0, trip_cost − additional payments)
-
-   Auto-labels each new payment as the next installment. The advance is #1,
-   so the first additional payment is "Second installment".
-   ------------------------------------------------------------------------- */
+/* DriverPaymentsBlock — installments log */
 function DriverPaymentsBlock({ transport, onPaid }) {
   const [open, setOpen] = useState(false);
   const [amount, setAmount] = useState("");
@@ -851,10 +713,10 @@ function DriverPaymentsBlock({ transport, onPaid }) {
   const tax         = Number(transport.tax_gbse      || 0);
   const paidSoFar   = payments.reduce((s, p) => s + Number(p.amount || 0), 0);
 
-  const tripCost     = Math.max(0, totalAmount - advance) + labor + road + tax;
-  const totalCostDue = Math.max(0, tripCost - paidSoFar);
+  const tripCost     = totalAmount + labor + road + tax;
+  const totalCostDue = Math.max(0, tripCost - advance - paidSoFar);
 
-  const nextInstallmentNumber = payments.length + 2;   // advance = #1
+  const nextInstallmentNumber = payments.length + 2;
 
   const bs = {
     year:  transport.date_bs_year  || 2083,

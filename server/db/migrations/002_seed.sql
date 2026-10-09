@@ -23,20 +23,20 @@ INSERT INTO permissions (module, action) VALUES
   ('teams','view'),('teams','create'),('teams','update'),('teams','delete');
 
 -- Baseline role permissions.
--- USER: view + create/update on business modules; NO dashboard, NO transactions, NO settings, NO users/teams.
+-- USER: can only use transportation.
 INSERT INTO role_permissions (role_id, permission_id)
 SELECT r.id, p.id FROM roles r JOIN permissions p ON (
   (r.code = 'USER' AND p.module IN
-    ('inventory','purchases','sales','transportation','suppliers','customers','office_expenses','demolition','reports')
+    ('transportation')
    AND p.action IN ('view','create','update'))
 );
 
--- ACCOUNTANT: same as USER + dashboard:view + transactions:*
+-- ACCOUNTANT: unable to view dashboard + transactions:*
 INSERT INTO role_permissions (role_id, permission_id)
 SELECT r.id, p.id FROM roles r JOIN permissions p ON (
   (r.code = 'ACCOUNTANT' AND p.module IN
-    ('dashboard','inventory','purchases','sales','transportation','suppliers','customers',
-     'transactions','office_expenses','demolition','reports')
+    ('inventory','purchases','sales','transportation','suppliers','customers',
+     'office_expenses','demolition','reports')
    AND p.action IN ('view','create','update'))
 );
 
