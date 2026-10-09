@@ -100,7 +100,7 @@ function daysInBsMonth(year, month) {
 const lineComputed = (line) => {
   const gross = num(line.gross_qty);
   const dust  = num(line.dust_qty);
-  const net   = Math.max(0, gross);
+  const net   = Math.max(0, gross - dust);   
   const rate  = num(line.rate);
   const labor = num(line.labor_charge);
   const base  = net * rate;

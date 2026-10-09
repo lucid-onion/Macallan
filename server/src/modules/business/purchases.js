@@ -68,9 +68,11 @@ const batchSchema = z.object({
 
 function recompute(input) {
   const gross = Number(input.gross_qty)    || 0;
+  const report = Number(input.dust_qty)    || 0;
   const rate  = Number(input.rate)         || 0;
   const labor = Number(input.labor_charge) || 0;
-  input.net_qty      = round3(Math.max(0, gross));
+  const net   = Math.max(0, gross - report);
+  input.net_qty      = round3(net);
   input.labor_charge = round2(Math.max(0, labor));
   input.total        = round2(gross * rate + labor);
 }
@@ -305,22 +307,24 @@ router.patch("/:id", requirePermission("purchases", "update"), async (req, res, 
 
     if (
       input.gross_qty    !== undefined ||
+      input.dust_qty     !== undefined ||
       input.rate         !== undefined ||
       input.labor_charge !== undefined
     ) {
       const cur = await query(
-        `SELECT gross_qty, rate, labor_charge FROM purchases WHERE id = $1 AND deleted_at IS NULL`,
+        `SELECT gross_qty, dust_qty, rate, labor_charge FROM purchases WHERE id = $1 AND deleted_at IS NULL`,
         [req.params.id]
       );
       if (!cur.rowCount) throw notFound();
-
-      const gross = Number(input.gross_qty    ?? cur.rows[0].gross_qty)    || 0;
-      const rate  = Number(input.rate         ?? cur.rows[0].rate)         || 0;
-      const labor = Number(input.labor_charge ?? cur.rows[0].labor_charge) || 0;
-
-      input.net_qty      = round3(Math.max(0, gross));
+    
+      const gross  = Number(input.gross_qty    ?? cur.rows[0].gross_qty)    || 0;
+      const report = Number(input.dust_qty     ?? cur.rows[0].dust_qty)     || 0;
+      const rate   = Number(input.rate         ?? cur.rows[0].rate)         || 0;
+      const labor  = Number(input.labor_charge ?? cur.rows[0].labor_charge) || 0;
+    
+      input.net_qty      = round3(Math.max(0, gross - report));
       input.labor_charge = round2(Math.max(0, labor));
-      input.total        = round2(gross * rate + labor);
+      input.total        = round2(Math.max(0, gross - report) * rate + labor);
     }
 
     const entries = Object.entries(input);

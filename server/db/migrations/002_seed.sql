@@ -27,7 +27,7 @@ INSERT INTO permissions (module, action) VALUES
 INSERT INTO role_permissions (role_id, permission_id)
 SELECT r.id, p.id FROM roles r JOIN permissions p ON (
   (r.code = 'USER' AND p.module IN
-    ('transportation')
+    ('transportation', 'inventory', 'demolition', 'notes', 'office_expenses')
    AND p.action IN ('view','create','update'))
 );
 
