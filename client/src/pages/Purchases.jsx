@@ -761,7 +761,7 @@ export default function Purchases() {
                       <input type="number" min="0" step="0.001" className={inputCls} value={line.gross_qty} required
                         onChange={(e) => patchLine(i, { gross_qty: e.target.value })} />
                     </Field>
-                    <Field label="Report Amount (kg)">
+                    <Field label="Report Amount">
                       <input type="number" min="0" step="0.001" className={inputCls} value={line.dust_qty}
                         onChange={(e) => patchLine(i, { dust_qty: e.target.value })} />
                     </Field>
