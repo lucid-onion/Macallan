@@ -1,5 +1,5 @@
 -- ============================================================================
--- 010 — Transportation: fully standalone. No more link to purchase trips.
+-- 009 — Transportation: fully standalone. No more link to purchase trips.
 --       Drop trip_id and link_type. Customer name stays as free text.
 -- ============================================================================
 
