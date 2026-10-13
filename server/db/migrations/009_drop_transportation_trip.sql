@@ -1,6 +1,6 @@
 -- ============================================================================
 -- 009 — Transportation: fully standalone. No more link to purchase trips.
---       Drop trip_id and link_type. Customer name stays as free text.
+--       Drop trip_id and link_type. Supplier name stays as free text.
 -- ============================================================================
 
 ALTER TABLE transportation DROP COLUMN IF EXISTS trip_id;

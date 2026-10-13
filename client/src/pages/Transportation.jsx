@@ -457,7 +457,7 @@ export default function Transportation() {
           }
         >
           <div className="grid grid-cols-2 gap-x-5 gap-y-2.5 mb-4 max-[560px]:grid-cols-1">
-            <DetailPair label="Customer" value={detail.customer_name || "—"} />
+            <DetailPair label="Supplier" value={detail.supplier_name || "—"} />
             <DetailPair label="Invoice" value={detail.invoice || "—"} />
             <DetailPair label="Date (BS)" value={formatBs(detail)} />
             <DetailPair label="Date (EN)" value={adStr(detail)} />
@@ -504,12 +504,12 @@ export default function Transportation() {
               </div>
             )}
 
-            <h4 className="text-[13.5px] font-semibold mb-3">Customer</h4>
+            <h4 className="text-[13.5px] font-semibold mb-3">Supplier</h4>
             <div className="grid grid-cols-2 gap-3.5 mb-5 max-[560px]:grid-cols-1">
-              <Field label="Customer" span={2}>
+              <Field label="Supplier" span={2}>
                 <input className={inputCls} value={form.customer_name}
                   onChange={(e) => setForm((f) => ({ ...f, customer_name: e.target.value }))}
-                  placeholder="Customer / company name" />
+                  placeholder="Supplier / company name" />
               </Field>
               <Field label="Invoice" span={2}>
                 <input className={inputCls} value={form.invoice}
