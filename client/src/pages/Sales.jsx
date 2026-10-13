@@ -622,6 +622,10 @@ export default function Sales() {
                   {customers.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
                 </select>
               </Field>
+              <Field label="Invoice #">
+                <input className={inputCls} value={form.invoice} required
+                  onChange={(e) => setForm((f) => ({ ...f, invoice: e.target.value }))} />
+              </Field>              
               <Field label="Product">
                 <input className={inputCls} value={form.product} required
                   placeholder="e.g. TMT Rod 12mm"
