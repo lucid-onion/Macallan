@@ -768,8 +768,8 @@ function DriverPaymentsBlock({ transport, onPaid }) {
 
       <div className="grid grid-cols-4 gap-3 mb-4 max-[560px]:grid-cols-1">
         <div className="bg-surface-sunken border border-line-soft rounded-sm px-3 py-2">
-          <div className="text-[11px] text-ink-faint mb-1">Total Amount</div>
-          <div className="text-sm font-semibold tabular-nums">{rupees(totalAmount)}</div>
+          <div className="text-[11px] text-ink-faint mb-1">Total Cost</div>
+          <div className="text-sm font-semibold tabular-nums">{rupees(totalCost)}</div>
         </div>
         <div className="bg-surface-sunken border border-line-soft rounded-sm px-3 py-2">
           <div className="text-[11px] text-ink-faint mb-1">Advance</div>

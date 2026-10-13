@@ -1,7 +1,5 @@
 .env
-<<<<<<< HEAD
-node_modules/
-=======
 node_modules/
 dist/
->>>>>>> db56760 (ignore build output)
+cookies.txt
+payload.json
