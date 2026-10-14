@@ -74,7 +74,7 @@ function recompute(input) {
   const net   = Math.max(0, gross - report);
   input.net_qty      = round3(net);
   input.labor_charge = round2(Math.max(0, labor));
-  input.total        = round2(gross * rate + labor);
+  input.total        = round2(net * rate + labor);
 }
 
 async function insertPurchase(client, input, userId) {

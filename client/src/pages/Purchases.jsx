@@ -434,6 +434,7 @@ export default function Purchases() {
             <tr>
               <th>Material</th>
               <th class="num">Gross Qty</th>
+              <th class="num">Dust (KG)</th>
               <th class="num">Rate / kg</th>
               <th class="num">Product Amount</th>
               <th class="num">Labor</th>
@@ -444,10 +445,11 @@ export default function Purchases() {
             <tr>
               <td>${esc(row.material || "—")}</td>
               <td class="num">${esc(kg(row.gross_qty))}</td>
+              <td class="num">-${esc(kg(row.dust_qty))}</td>
               <td class="num">${esc(rupees(row.rate))}</td>
-              <td class="num">${esc(rupees(base))}</td>
-              <td class="num">${esc(rupees(labor))}</td>
-              <td class="num">${esc(rupees(total))}</td>
+              <td class="num">${esc(rupees(row.net_qty * row.rate))}</td>
+              <td class="num">${esc(rupees(row.labor_charge))}</td>
+              <td class="num">${esc(rupees(row.total))}</td>
             </tr>
           </tbody>
         </table>
@@ -462,7 +464,7 @@ export default function Purchases() {
           </table>` : ""}
 
         <div class="doc-summary">
-          <div><span>Product Amount (gross × rate)</span><span>${esc(rupees(base))}</span></div>
+          <div><span>Product Amount (net × rate)</span><span>${esc(rupees(base))}</span></div>
           <div><span>Labor Charge</span><span>${esc(rupees(labor))}</span></div>
           <div class="doc-summary-strong"><span>Total</span><span>${esc(rupees(total))}</span></div>
           <div><span>Paid</span><span>${esc(rupees(paidTotal))}</span></div>
@@ -761,7 +763,7 @@ export default function Purchases() {
                       <input type="number" min="0" step="0.001" className={inputCls} value={line.gross_qty} required
                         onChange={(e) => patchLine(i, { gross_qty: e.target.value })} />
                     </Field>
-                    <Field label="Report Amount">
+                    <Field label="Report Amount (KG)">
                       <input type="number" min="0" step="0.001" className={inputCls} value={line.dust_qty}
                         onChange={(e) => patchLine(i, { dust_qty: e.target.value })} />
                     </Field>
