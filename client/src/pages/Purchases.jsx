@@ -1,15 +1,5 @@
 ﻿/* ==========================================================================
    Purchases.jsx — multi-line purchase entry with trip grouping.
-
-   Header (shared across all lines): Month (BS), Day, English Date, Status,
-     Company, Truck No., Loader Name.
-
-   Line (per purchase): Invoice, Supplier, Person, Phone, Material,
-     Gross, Report Dust, Net, Rate, Labor Cost, Total, Payment.
-
-   Total = gross × rate + labor_cost
-
-   No "Save & Add Transport" button — purchases never touch transportation.
    ========================================================================== */
 import { useEffect, useMemo, useState } from "react";
 import { api } from "../api/client";
@@ -50,8 +40,18 @@ const EMPTY_HEADER = {
   date_ad:       bsToAdString(todayBs),
   status:        "Delivered",
   company:       BRAND,
-  truck_no:      "",
-  loader_name:   "",
+  
+  // Transport fields (restored)
+  truck_no:           "",
+  truck_weight_kg:    "",
+  truck_driver:       "",
+  truck_driver_phone: "",
+  from_location:      "",
+  to_location:        "",
+  loader_name:        "",
+  transport_fee:      "0",
+  road_expense:       "0",
+  tax_gbse:           "0",
 };
 
 const num = (v) => { const n = Number(v); return isFinite(n) ? n : 0; };
@@ -243,8 +243,18 @@ export default function Purchases() {
       date_ad:       row.date_ad ? String(row.date_ad).slice(0, 10) : bsToAdString(todayBs),
       status:        row.status || "Delivered",
       company:       row.company || BRAND,
-      truck_no:      row.truck_no || "",
-      loader_name:   row.loader_name || "",
+      
+      // Restore transport fields on edit
+      truck_no:           row.truck_no || "",
+      truck_weight_kg:    row.truck_weight_kg ?? "",
+      truck_driver:       row.truck_driver || "",
+      truck_driver_phone: row.truck_driver_phone || "",
+      from_location:      row.from_location || "",
+      to_location:        row.to_location || "",
+      loader_name:        row.loader_name || "",
+      transport_fee:      row.transport_fee ?? "0",
+      road_expense:       row.road_expense ?? "0",
+      tax_gbse:           row.tax_gbse ?? "0",
     });
     setLines([{
       invoice: row.invoice || "",
@@ -303,8 +313,19 @@ export default function Purchases() {
       date_bs_day:   Number(header.date_bs_day),
       date_ad:       header.date_ad,
       company:       header.company.trim() || undefined,
-      truck_no:      header.truck_no.trim()    || null,
-      loader_name:   header.loader_name.trim() || null,
+      
+      // Restore transport fields to payload
+      truck_no:           header.truck_no.trim() || null,
+      truck_weight_kg:    num(header.truck_weight_kg) || null,
+      truck_driver:       header.truck_driver.trim() || null,
+      truck_driver_phone: header.truck_driver_phone.trim() || null,
+      from_location:      header.from_location.trim() || null,
+      to_location:        header.to_location.trim() || null,
+      loader_name:        header.loader_name.trim() || null,
+      transport_fee:      num(header.transport_fee),
+      road_expense:       num(header.road_expense),
+      tax_gbse:           num(header.tax_gbse),
+      
       trip_id:       tripId,
     };
 
@@ -374,20 +395,87 @@ export default function Purchases() {
 
   async function printPurchaseInvoice(row) {
     const company = row.company || BRAND;
-    const payments = await fetchPaymentsForPurchase(row.id);
-    const paidTotal = payments.reduce((s, p) => s + num(p.amount), 0);
-    const due = Math.max(0, num(row.total) - paidTotal);
-    const base  = num(row.gross_qty) * num(row.rate);
-    const labor = num(row.labor_charge);
-    const total = num(row.total);
+    const tripRows = row.trip_id 
+      ? rows.filter(r => r.trip_id === row.trip_id) 
+      : [row];
 
-    const paymentRows = payments.map((p) => `
-      <tr>
-        <td>${esc(formatBs(p))}</td>
-        <td>${esc(p.method || "-")}</td>
-        <td>${esc(p.note || "-")}</td>
-        <td class="num">${esc(rupees(p.amount))}</td>
-      </tr>`).join("");
+    // Fetch payments for all rows in the trip
+    const allPayments = (await Promise.all(
+      tripRows.map(r => fetchPaymentsForPurchase(r.id))
+    )).flat();
+
+    const paidTotal = allPayments.reduce((s, p) => s + num(p.amount), 0);
+    const grandTotal = tripRows.reduce((s, r) => s + num(r.total), 0);
+    const due = Math.max(0, grandTotal - paidTotal);
+
+    // Build a separate box for each supplier
+    const supplierBoxes = tripRows.map((r, idx) => {
+      const rBase = num(r.net_qty) * num(r.rate);
+      const rLabor = num(r.labor_charge);
+      const rPaid = allPayments.filter(p => Number(p.ref_id) === Number(r.id))
+                               .reduce((s, p) => s + num(p.amount), 0);
+      
+      return `
+        <div class="doc-supplier-box" style="border: 1px solid #999; padding: 10px; margin-bottom: 15px; page-break-inside: avoid;">
+          <div style="display: flex; justify-content: space-between; border-bottom: 1px solid #ccc; padding-bottom: 5px; margin-bottom: 10px;">
+            <div>
+              <div style="font-size: 9.5px; text-transform: uppercase; color: #555;">Supplier ${idx + 1} of ${tripRows.length} · ${esc(r.invoice)}</div>
+              <div style="font-size: 14px; font-weight: bold;">${esc(supplierNameById.get(r.supplier_id) || "—")}</div>
+              ${(r.contact_person || r.contact_phone) ? `<div style="font-size: 10.5px; color: #444;">${esc([r.contact_person, r.contact_phone].filter(Boolean).join(" · "))}</div>` : ""}
+            </div>
+            <div style="text-align: right; font-size: 10px;">
+              <div>${esc(formatBs(r))}</div>
+              <div>${esc(adStr(r))}</div>
+              <div>${esc(r.status)}</div>
+            </div>
+          </div>
+          
+          <table class="doc-table">
+            <thead>
+              <tr>
+                <th>Material</th>
+                <th class="num">Gross Qty</th>
+                <th class="num">Dust (KG)</th>
+                <th class="num">Net Qty</th>
+                <th class="num">Rate / kg</th>
+                <th class="num">Product Amount</th>
+                <th class="num">Labor</th>
+                <th class="num">Total</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>${esc(r.material || "—")}</td>
+                <td class="num">${esc(kg(r.gross_qty))}</td>
+                <td class="num">-${esc(kg(r.dust_qty))}</td>
+                <td class="num">${esc(kg(r.net_qty))}</td>
+                <td class="num">${esc(rupees(r.rate))}</td>
+                <td class="num">${esc(rupees(rBase))}</td>
+                <td class="num">${esc(rupees(rLabor))}</td>
+                <td class="num">${esc(rupees(r.total))}</td>
+              </tr>
+            </tbody>
+          </table>
+
+          <div class="doc-summary" style="margin-top: 10px; width: 250px;">
+            <div><span>Total Amount</span><span>${esc(rupees(r.total))}</span></div>
+            <div><span>Paid</span><span>${esc(rupees(rPaid))}</span></div>
+            <div class="doc-summary-strong"><span>Balance Due</span><span>${esc(rupees(Math.max(0, num(r.total) - rPaid)))}</span></div>
+          </div>
+        </div>
+      `;
+    }).join("");
+
+    const grandBlock = tripRows.length > 1 ? `
+      <div class="doc-summary" style="width: 250px; margin-left: auto; margin-top: 10px;">
+        <div><span>All Orders Total</span><span>${esc(rupees(grandTotal))}</span></div>
+        <div><span>All Paid</span><span>${esc(rupees(paidTotal))}</span></div>
+        <div class="doc-summary-strong"><span>All Balance Due</span><span>${esc(rupees(due))}</span></div>
+      </div>` : "";
+
+    // Transportation Details Block (shared across the trip)
+    const transportBlock = (row.truck_no || row.truck_driver || row.loader_name || row.transport_fee > 0) ? `
+    ` : "";
 
     printVoucher(`
       <div class="doc-sheet">
@@ -396,8 +484,8 @@ export default function Purchases() {
             <div class="doc-company">${esc(company)}</div>
           </div>
           <div class="doc-kind">
-            <div class="doc-title">Purchase Invoice</div>
-            <div class="doc-no">No. ${esc(row.invoice)}</div>
+            <div class="doc-title">Purchase Invoice ${tripRows.length > 1 ? '(Shared Truck)' : ''}</div>
+            <div class="doc-no">No. ${esc(tripRows.map(r => r.invoice).join(", "))}</div>
           </div>
         </div>
 
@@ -405,75 +493,16 @@ export default function Purchases() {
           <div>Date (BS)<strong>${esc(formatBs(row))}</strong></div>
           <div>Date (English)<strong>${esc(adStr(row))}</strong></div>
           <div>Company<strong>${esc(company)}</strong></div>
-          <div>Status<strong>${esc(row.status || "Delivered")}</strong></div>
+          <div>Suppliers<strong>${tripRows.length}</strong></div>
         </div>
 
-        <div class="doc-two-col">
-          <div class="doc-box">
-            <div class="doc-box-title">Purchased From (Supplier)</div>
-            <div class="doc-box-main">${esc(supplierNameById.get(row.supplier_id) || "—")}</div>
-            ${(row.contact_person || row.contact_phone)
-              ? `<div class="doc-box-sub">${esc([row.contact_person, row.contact_phone].filter(Boolean).join(" · "))}</div>`
-              : ""}
-          </div>
-          <div class="doc-box">
-            <div class="doc-box-title">Billed To</div>
-            <div class="doc-box-main">${esc(company)}</div>
-          </div>
-        </div>
+        ${supplierBoxes}
+        ${grandBlock}
+        ${transportBlock}
 
-        ${(row.truck_no || row.loader_name) ? `
-          <div class="doc-fields doc-fields-2">
-            <div><span>Truck No.</span><strong>${esc(row.truck_no || "—")}</strong></div>
-            <div><span>Loader</span><strong>${esc(row.loader_name || "—")}</strong></div>
-          </div>` : ""}
-
-        <div class="doc-section-title">Product Details</div>
-        <table class="doc-table">
-          <thead>
-            <tr>
-              <th>Material</th>
-              <th class="num">Gross Qty</th>
-              <th class="num">Dust (KG)</th>
-              <th class="num">Rate / kg</th>
-              <th class="num">Product Amount</th>
-              <th class="num">Labor</th>
-              <th class="num">Total</th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr>
-              <td>${esc(row.material || "—")}</td>
-              <td class="num">${esc(kg(row.gross_qty))}</td>
-              <td class="num">-${esc(kg(row.dust_qty))}</td>
-              <td class="num">${esc(rupees(row.rate))}</td>
-              <td class="num">${esc(rupees(row.net_qty * row.rate))}</td>
-              <td class="num">${esc(rupees(row.labor_charge))}</td>
-              <td class="num">${esc(rupees(row.total))}</td>
-            </tr>
-          </tbody>
-        </table>
-
-        ${payments.length ? `
-          <div class="doc-section-title">Payments Made</div>
-          <table class="doc-table">
-            <thead>
-              <tr><th>Date (BS)</th><th>Method</th><th>Note</th><th class="num">Amount</th></tr>
-            </thead>
-            <tbody>${paymentRows}</tbody>
-          </table>` : ""}
-
-        <div class="doc-summary">
-          <div><span>Product Amount (net × rate)</span><span>${esc(rupees(base))}</span></div>
-          <div><span>Labor Charge</span><span>${esc(rupees(labor))}</span></div>
-          <div class="doc-summary-strong"><span>Total</span><span>${esc(rupees(total))}</span></div>
-          <div><span>Paid</span><span>${esc(rupees(paidTotal))}</span></div>
-          <div class="doc-summary-strong"><span>Balance Due</span><span>${esc(rupees(due))}</span></div>
-        </div>
-
-        <div class="doc-signatures">
-          <div>Received By</div>
-          <div>Authorized By</div>
+        <div class="doc-signatures" style="margin-top: 30px;">
+          <div>Received By: ${esc(row.signature || '')}</div>
+          <div>Authorized By: ${esc(row.paid_by || '')}</div>
         </div>
 
         <div class="doc-foot">
@@ -591,7 +620,11 @@ export default function Purchases() {
           wide
           footer={
             <>
-              <Button onClick={() => printPurchaseInvoice(detail)}>Print</Button>
+              <Button onClick={() => printPurchaseInvoice(detail)}>
+                {detail.trip_id && rows.filter(r => r.trip_id === detail.trip_id).length > 1
+                  ? `Print All ${rows.filter(r => r.trip_id === detail.trip_id).length} Orders`
+                  : "Print"}
+              </Button>
               <Button onClick={() => setDetail(null)}>Close</Button>
             </>
           }
@@ -696,16 +729,53 @@ export default function Purchases() {
                   {BRAND}
                 </div>
               </Field>
-              <Field label="Truck No." hint="once for the whole truck">
+            </div>
+
+            {/* ============ TRUCK & TRANSPORT DETAILS ============ */}
+            <h4 className="text-[13.5px] font-semibold mb-3 pt-4 border-t border-dashed border-line">
+              Truck &amp; Transport Detail
+            </h4>
+            <div className="grid grid-cols-2 gap-3.5 mb-5 max-[560px]:grid-cols-1">
+              <Field label="Truck Weight (kg)">
+                <input type="number" min="0" step="0.01" className={inputCls} value={header.truck_weight_kg}
+                  onChange={(e) => setHeader((h) => ({ ...h, truck_weight_kg: e.target.value }))} />
+              </Field>
+              <Field label="Truck No.">
                 <input className={inputCls} value={header.truck_no}
                   onChange={(e) => setHeader((h) => ({ ...h, truck_no: e.target.value }))}
                   placeholder="BA 1 KHA 1234" />
               </Field>
-
-              <Field label="Loader Name" span={2}>
+              <Field label="Driver Name">
+                <input className={inputCls} value={header.truck_driver}
+                  onChange={(e) => setHeader((h) => ({ ...h, truck_driver: e.target.value }))} />
+              </Field>
+              <Field label="Driver No.">
+                <input className={inputCls} value={header.truck_driver_phone}
+                  onChange={(e) => setHeader((h) => ({ ...h, truck_driver_phone: e.target.value }))} />
+              </Field>
+              <Field label="From">
+                <input className={inputCls} value={header.from_location}
+                  onChange={(e) => setHeader((h) => ({ ...h, from_location: e.target.value }))} />
+              </Field>
+              <Field label="To">
+                <input className={inputCls} value={header.to_location}
+                  onChange={(e) => setHeader((h) => ({ ...h, to_location: e.target.value }))} />
+              </Field>
+              <Field label="Loader Name">
                 <input className={inputCls} value={header.loader_name}
-                  onChange={(e) => setHeader((h) => ({ ...h, loader_name: e.target.value }))}
-                  placeholder="Loader name" />
+                  onChange={(e) => setHeader((h) => ({ ...h, loader_name: e.target.value }))} />
+              </Field>
+              <Field label="Transport Fee (Rs)">
+                <input type="number" min="0" step="0.01" className={inputCls} value={header.transport_fee}
+                  onChange={(e) => setHeader((h) => ({ ...h, transport_fee: e.target.value }))} />
+              </Field>
+              <Field label="Road Expenses (Rs)">
+                <input type="number" min="0" step="0.01" className={inputCls} value={header.road_expense}
+                  onChange={(e) => setHeader((h) => ({ ...h, road_expense: e.target.value }))} />
+              </Field>
+              <Field label="Tax Paid (G.B.S.E) (Rs)">
+                <input type="number" min="0" step="0.01" className={inputCls} value={header.tax_gbse}
+                  onChange={(e) => setHeader((h) => ({ ...h, tax_gbse: e.target.value }))} />
               </Field>
             </div>
 
@@ -763,7 +833,7 @@ export default function Purchases() {
                       <input type="number" min="0" step="0.001" className={inputCls} value={line.gross_qty} required
                         onChange={(e) => patchLine(i, { gross_qty: e.target.value })} />
                     </Field>
-                    <Field label="Report Amount (KG)">
+                    <Field label="Dust (Reported Amount) KG">
                       <input type="number" min="0" step="0.001" className={inputCls} value={line.dust_qty}
                         onChange={(e) => patchLine(i, { dust_qty: e.target.value })} />
                     </Field>
