@@ -65,21 +65,29 @@ export default function Transactions() {
   const [saving, setSaving] = useState(false);
   const [formError, setFormError] = useState(null);
 
+  // Hold lists of names for the party dropdown
+  const [customerNames, setCustomerNames] = useState([]);
+  const [supplierNames, setSupplierNames] = useState([]);
+
   const [toDelete, setToDelete] = useState(null);
   const [deleting, setDeleting] = useState(false);
 
   async function load() {
     setLoading(true); setError(null);
     try {
-      const [t, pb] = await Promise.all([
+      const [t, pb, c, s] = await Promise.all([
         api.get("/api/transactions"),
         api.get("/api/transactions/party-balances"),
+        api.get("/api/customers").catch(() => ({ items: [] })),
+        api.get("/api/suppliers").catch(() => ({ items: [] })),
       ]);
       setRows(t.items || []);
       setBalances({
         customers: pb.customers || [],
         suppliers: pb.suppliers || [],
       });
+      setCustomerNames(c.items || []);
+      setSupplierNames(s.items || []);
     } catch (e) {
       setError(e.message || "Failed to load transactions");
     } finally {
@@ -416,11 +424,48 @@ export default function Transactions() {
                   ))}
                 </select>
               </Field>
+              
+              {/* Conditional Party Field based on Transaction Type */}
               <Field label="Party" span={2}>
-                <input className={inputCls} value={form.party_key}
-                  onChange={(e) => setForm((f) => ({ ...f, party_key: e.target.value, party_label: e.target.value }))}
-                  placeholder="Party name" />
+                {["sale_payment", "advance_received"].includes(form.type) ? (
+                  <select className={selectCls} value={form.party_key}
+                    onChange={(e) => {
+                      const val = e.target.value;
+                      const name = customerNames.find((c) => String(c.id) === val || c.name === val);
+                      setForm((f) => ({
+                        ...f,
+                        party_key: val,
+                        party_label: name ? name.name : val,
+                      }));
+                    }}>
+                    <option value="">— select customer —</option>
+                    {customerNames.map((c) => (
+                      <option key={c.id} value={c.name}>{c.name}</option>
+                    ))}
+                  </select>
+                ) : ["purchase_payment", "advance_given"].includes(form.type) ? (
+                  <select className={selectCls} value={form.party_key}
+                    onChange={(e) => {
+                      const val = e.target.value;
+                      const name = supplierNames.find((s) => String(s.id) === val || s.name === val);
+                      setForm((f) => ({
+                        ...f,
+                        party_key: val,
+                        party_label: name ? name.name : val,
+                      }));
+                    }}>
+                    <option value="">— select supplier —</option>
+                    {supplierNames.map((s) => (
+                      <option key={s.id} value={s.name}>{s.name}</option>
+                    ))}
+                  </select>
+                ) : (
+                  <input className={inputCls} value={form.party_key}
+                    onChange={(e) => setForm((f) => ({ ...f, party_key: e.target.value, party_label: e.target.value }))}
+                    placeholder="Enter party name manually" />
+                )}
               </Field>
+
               <Field label="Amount (Rs)">
                 <input type="number" min="0" step="0.01" className={inputCls} value={form.amount} required
                   onChange={(e) => setForm((f) => ({ ...f, amount: e.target.value }))} />
