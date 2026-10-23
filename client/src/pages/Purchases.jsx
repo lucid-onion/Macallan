@@ -474,7 +474,7 @@ export default function Purchases() {
       </div>` : "";
 
     // Transportation Details Block (shared across the trip)
-    const transportBlock = (row.truck_no || row.truck_driver || row.loader_name || row.transport_fee > 0) ? `
+    const transportBlock = (row.truck_no) ? `
     ` : "";
 
     printVoucher(`
@@ -729,56 +729,13 @@ export default function Purchases() {
                   {BRAND}
                 </div>
               </Field>
-            </div>
-
-            {/* ============ TRUCK & TRANSPORT DETAILS ============ */}
-            <h4 className="text-[13.5px] font-semibold mb-3 pt-4 border-t border-dashed border-line">
-              Truck &amp; Transport Detail
-            </h4>
-            <div className="grid grid-cols-2 gap-3.5 mb-5 max-[560px]:grid-cols-1">
-              <Field label="Truck Weight (kg)">
-                <input type="number" min="0" step="0.01" className={inputCls} value={header.truck_weight_kg}
-                  onChange={(e) => setHeader((h) => ({ ...h, truck_weight_kg: e.target.value }))} />
-              </Field>
+              {/* {============== TRUCK NO =============} */}
               <Field label="Truck No.">
                 <input className={inputCls} value={header.truck_no}
                   onChange={(e) => setHeader((h) => ({ ...h, truck_no: e.target.value }))}
                   placeholder="BA 1 KHA 1234" />
               </Field>
-              <Field label="Driver Name">
-                <input className={inputCls} value={header.truck_driver}
-                  onChange={(e) => setHeader((h) => ({ ...h, truck_driver: e.target.value }))} />
-              </Field>
-              <Field label="Driver No.">
-                <input className={inputCls} value={header.truck_driver_phone}
-                  onChange={(e) => setHeader((h) => ({ ...h, truck_driver_phone: e.target.value }))} />
-              </Field>
-              <Field label="From">
-                <input className={inputCls} value={header.from_location}
-                  onChange={(e) => setHeader((h) => ({ ...h, from_location: e.target.value }))} />
-              </Field>
-              <Field label="To">
-                <input className={inputCls} value={header.to_location}
-                  onChange={(e) => setHeader((h) => ({ ...h, to_location: e.target.value }))} />
-              </Field>
-              <Field label="Loader Name">
-                <input className={inputCls} value={header.loader_name}
-                  onChange={(e) => setHeader((h) => ({ ...h, loader_name: e.target.value }))} />
-              </Field>
-              <Field label="Transport Fee (Rs)">
-                <input type="number" min="0" step="0.01" className={inputCls} value={header.transport_fee}
-                  onChange={(e) => setHeader((h) => ({ ...h, transport_fee: e.target.value }))} />
-              </Field>
-              <Field label="Road Expenses (Rs)">
-                <input type="number" min="0" step="0.01" className={inputCls} value={header.road_expense}
-                  onChange={(e) => setHeader((h) => ({ ...h, road_expense: e.target.value }))} />
-              </Field>
-              <Field label="Tax Paid (G.B.S.E) (Rs)">
-                <input type="number" min="0" step="0.01" className={inputCls} value={header.tax_gbse}
-                  onChange={(e) => setHeader((h) => ({ ...h, tax_gbse: e.target.value }))} />
-              </Field>
             </div>
-
             {/* ============ PURCHASE LINES ============ */}
             {lines.map((line, i) => {
               const c = lineComputed(line);

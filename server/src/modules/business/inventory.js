@@ -5,7 +5,6 @@ const schema = z.object({
   name:            z.string().min(1).max(120),
   category:        z.string().min(1).max(80),
   stock_kg:        z.number().min(0),
-  reorder_level:   z.number().min(0),
   estimated_price: z.number().min(0).nullable().optional(),
   contact_person:  z.string().max(120).optional(),
   contact_phone:   z.string().max(40).optional(),

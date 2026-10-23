@@ -150,15 +150,19 @@ CREATE TABLE customers (
 );
 
 CREATE TABLE inventory_items (
-  id            SERIAL PRIMARY KEY,
-  name          TEXT NOT NULL UNIQUE,
-  category      TEXT NOT NULL,
-  stock_kg      NUMERIC(14,3) NOT NULL DEFAULT 0,
-  reorder_level NUMERIC(14,3) NOT NULL DEFAULT 0,
-  created_by    UUID REFERENCES users(id),
-  created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
-  updated_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
-  deleted_at    TIMESTAMPTZ
+  id              SERIAL PRIMARY KEY,
+  name            TEXT NOT NULL UNIQUE,
+  category        TEXT NOT NULL,
+  stock_kg        NUMERIC(14,3) NOT NULL DEFAULT 0,
+  estimated_price NUMERIC(14,2) NOT NULL DEFAULT 0,
+  contact_person  TEXT,
+  contact_phone   TEXT,
+  location        TEXT,
+  description     TEXT,
+  created_by      UUID REFERENCES users(id),
+  created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+  deleted_at      TIMESTAMPTZ
 );
 
 -- Nepali (BS) date stored alongside Gregorian date.
