@@ -36,7 +36,7 @@ INSERT INTO role_permissions (role_id, permission_id)
 SELECT r.id, p.id FROM roles r JOIN permissions p ON (
   (r.code = 'ACCOUNTANT' AND p.module IN
     ('inventory','purchases','sales','transportation','suppliers','customers',
-     'office_expenses','demolition','reports')
+     'office_expenses','demolition','reports','notes')
    AND p.action IN ('view','create','update'))
 );
 
@@ -46,7 +46,7 @@ INSERT INTO role_permissions (role_id, permission_id)
 SELECT r.id, p.id FROM roles r JOIN permissions p ON (
   (r.code = 'ADMIN' AND p.module IN
     ('dashboard','inventory','purchases','sales','transportation','suppliers','customers',
-     'transactions','office_expenses','demolition','reports','users','teams')
+     'transactions','office_expenses','demolition','reports','users','teams','notes')
    AND p.action IN ('view','create','update','delete'))
   OR (r.code='ADMIN' AND p.module='users' AND p.action IN ('view','create','update','deactivate'))
 );
@@ -64,9 +64,9 @@ INSERT INTO teams (name, description) VALUES
 -- Example team permission grants
 INSERT INTO team_permissions (team_id, permission_id)
 SELECT t.id, p.id FROM teams t JOIN permissions p ON (
-  (t.name='Operations' AND p.module IN ('inventory','purchases','sales','transportation','demolition','reports','suppliers','customers') AND p.action IN ('view','create','update'))
+  (t.name='Operations' AND p.module IN ('inventory','purchases','sales','transportation','demolition','reports','suppliers','customers','notes') AND p.action IN ('view','create','update'))
   OR (t.name='Finance' AND p.module IN ('dashboard','transactions','reports','office_expenses') AND p.action IN ('view','create','update'))
-  OR (t.name='Administration' AND p.module IN ('users','teams') AND p.action='view')
+  OR (t.name='Administration' AND p.module IN ('users','teams','notes') AND p.action='view')
 );
 
 -- Default settings
