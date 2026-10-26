@@ -32,6 +32,8 @@ const EMPTY_FORM = {
   customer_id: "",
   invoice: "",
   product: "",
+  person_name: "",
+  phone_number: "",
 
   date_bs_year:  todayBs.year,
   date_bs_month: todayBs.month,
@@ -233,7 +235,8 @@ export default function Sales() {
       customer_id: row.customer_id || "",
       invoice: row.invoice || "",
       product: row.product || "",
-
+      person_name: row.person_name || "",
+      phone_number: row.phone_number || "",
       date_bs_year:  row.date_bs_year  || todayBs.year,
       date_bs_month: row.date_bs_month || todayBs.month,
       date_bs_day:   row.date_bs_day   || todayBs.day,
@@ -241,6 +244,7 @@ export default function Sales() {
 
       gross_qty: row.gross_qty ?? "",
       dust_qty:  row.dust_qty  ?? "0",
+      net_qty:   row.net_qty   ?? "0",
       rate:      row.rate      ?? "",
       report_amount: row.report_amount ?? "0",
 
@@ -268,6 +272,8 @@ export default function Sales() {
         invoice:     form.invoice.trim(),
         customer_id: Number(form.customer_id),
         product:     form.product.trim(),
+        person_name: form.person_name.trim(),
+        phone_number: form.phone_number.trim(),
 
         date_bs_year:  Number(form.date_bs_year),
         date_bs_month: Number(form.date_bs_month),
@@ -438,6 +444,8 @@ export default function Sales() {
     { key: "date_bs", label: "Date (BS)", render: (r) => formatBs(r) },
     { key: "date_ad", label: "Date (EN)", render: (r) => adStr(r) },
     { key: "invoice", label: "Invoice" },
+    { key: "person_name", label: "Person Name" },
+    { key: "phone_number", label: "Phone Number" },
     { key: "customer", label: "Customer",
       render: (r) => customerNameById.get(r.customer_id) || "—" },
     { key: "product", label: "Product" },
@@ -593,9 +601,6 @@ export default function Sales() {
           footer={
             <>
               <Button onClick={() => setShowForm(false)} disabled={saving}>Cancel</Button>
-              {!editing && (
-                <Button type="button" disabled={saving}>Save &amp; Add Transport</Button>
-              )}
               <Button variant="primary" type="submit" form="sale-form" disabled={saving}>
                 {saving ? "Saving…" : editing ? "Save Changes" : "Save Sale"}
               </Button>
@@ -625,10 +630,25 @@ export default function Sales() {
               <Field label="Invoice #">
                 <input className={inputCls} value={form.invoice} required
                   onChange={(e) => setForm((f) => ({ ...f, invoice: e.target.value }))} />
+              </Field>
+              <Field label="Person Name">
+                <input className={inputCls} value={form.person_name} required
+                placeholder="Enter person name in charge"
+                  onChange={(e) => setForm((f) => ({ ...f, person_name: e.target.value }))} />
+              </Field>
+              <Field label="Phone Number">
+              <input className={inputCls} value={form.phone_number}
+                inputMode="numeric" maxLength={10}
+                required
+                onChange={(e) => {
+                  const digits = e.target.value.replace(/\D/g, "").slice(0, 10);
+                  setForm((f) => ({ ...f, phone_number: digits }));
+                }}
+                placeholder="9XXXXXXXXX" />
               </Field>              
-              <Field label="Product">
+              <Field label="Product" span={2}>
                 <input className={inputCls} value={form.product} required
-                  placeholder="e.g. TMT Rod 12mm"
+                  placeholder="Enter the product name"
                   onChange={(e) => setForm((f) => ({ ...f, product: e.target.value }))} />
               </Field>
             </div>

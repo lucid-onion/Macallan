@@ -201,6 +201,8 @@ CREATE TABLE sales (
   id            SERIAL PRIMARY KEY,
   invoice       TEXT NOT NULL UNIQUE,
   customer_id   INT NOT NULL REFERENCES customers(id),
+  person_name   TEXT NOT NULL,
+  phone_number  TEXT NOT NULL,
   product       TEXT NOT NULL,
   date_bs_year  INT NOT NULL,
   date_bs_month INT NOT NULL CHECK (date_bs_month BETWEEN 1 AND 12),

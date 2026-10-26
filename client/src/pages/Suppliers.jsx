@@ -398,8 +398,12 @@ export default function Suppliers() {
               </Field>
               <Field label="Phone">
                 <input className={inputCls} value={form.phone}
-                  onChange={(e) => setForm((f) => ({ ...f, phone: e.target.value }))}
-                  placeholder="98XXXXXXXX" />
+                inputMode="numeric" maxLength={10}
+                onChange={(e) => {
+                  const digits = e.target.value.replace(/\D/g, "").slice(0, 10);
+                  setForm((f) => ({ ...f, phone: digits }));
+                }}
+                placeholder="9XXXXXXXXX" />
               </Field>
               <Field label="Type" span={2}>
                 <select className={selectCls} value={form.type}

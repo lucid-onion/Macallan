@@ -78,7 +78,7 @@ ON CONFLICT (key) DO NOTHING;
 -- crypt() comes from pgcrypto
 INSERT INTO users (username, full_name, password_hash, role_id, team_id)
 SELECT 'superadmin', 'System Owner',
-       crypt('ChangeMe123!', gen_salt('bf', 12)),
+       crypt('ChangeMe123', gen_salt('bf', 12)),
        (SELECT id FROM roles WHERE code='SUPER_ADMIN'),
        (SELECT id FROM teams WHERE name='Administration')
 WHERE NOT EXISTS (SELECT 1 FROM users WHERE username='superadmin');
