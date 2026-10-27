@@ -273,23 +273,27 @@ export default function Inventory() {
                 <input type="number" min="0" step="0.01" className={inputCls}
                   value={form.estimated_price}
                   onChange={(e) => setForm(f => ({ ...f, estimated_price: e.target.value }))}
+                  required
                   placeholder="0" />
               </Field>
 
               <Field label="Contact Person">
                 <input className={inputCls} value={form.contact_person}
                   onChange={(e) => setForm(f => ({ ...f, contact_person: e.target.value }))}
+                  required
                   placeholder="Person to contact" />
               </Field>
               <Field label="Contact No.">
                 <input className={inputCls} value={form.contact_phone}
                   onChange={(e) => setForm(f => ({ ...f, contact_phone: e.target.value }))}
+                  required
                   placeholder="98XXXXXXXX" />
               </Field>
 
               <Field label="Location" span={2}>
                 <input className={inputCls} value={form.location}
                   onChange={(e) => setForm(f => ({ ...f, location: e.target.value }))}
+                  required
                   placeholder="Where this stock is kept / site address" />
               </Field>
 

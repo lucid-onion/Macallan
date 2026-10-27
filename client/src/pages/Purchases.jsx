@@ -41,7 +41,7 @@ const EMPTY_HEADER = {
   status:        "Delivered",
   company:       BRAND,
   
-  // Transport fields (restored)
+  // Transport fields
   truck_no:           "",
   truck_weight_kg:    "",
   truck_driver:       "",
@@ -244,7 +244,6 @@ export default function Purchases() {
       status:        row.status || "Delivered",
       company:       row.company || BRAND,
       
-      // Restore transport fields on edit
       truck_no:           row.truck_no || "",
       truck_weight_kg:    row.truck_weight_kg ?? "",
       truck_driver:       row.truck_driver || "",
@@ -314,7 +313,6 @@ export default function Purchases() {
       date_ad:       header.date_ad,
       company:       header.company.trim() || undefined,
       
-      // Restore transport fields to payload
       truck_no:           header.truck_no.trim() || null,
       truck_weight_kg:    num(header.truck_weight_kg) || null,
       truck_driver:       header.truck_driver.trim() || null,
@@ -386,96 +384,24 @@ export default function Purchases() {
 
   async function fetchPaymentsForPurchase(id) {
     try {
-      const { items } = await api.get("/api/transactions");
-      return (items || []).filter(
-        (t) => t.ref_type === "purchase" && Number(t.ref_id) === Number(id)
-      );
+      const { items } = await api.get(`/api/purchases/${id}/payments`);
+      return items || [];
     } catch { return []; }
   }
 
+  /* ---------- Print Single Invoice ---------- */
   async function printPurchaseInvoice(row) {
     const company = row.company || BRAND;
-    const tripRows = row.trip_id 
-      ? rows.filter(r => r.trip_id === row.trip_id) 
-      : [row];
-
-    // Fetch payments for all rows in the trip
-    const allPayments = (await Promise.all(
-      tripRows.map(r => fetchPaymentsForPurchase(r.id))
-    )).flat();
-
-    const paidTotal = allPayments.reduce((s, p) => s + num(p.amount), 0);
-    const grandTotal = tripRows.reduce((s, r) => s + num(r.total), 0);
+    
+    const payments = await fetchPaymentsForPurchase(row.id);
+    const paidTotal = payments.reduce((s, p) => s + num(p.amount), 0);
+    
+    const grandTotal = num(row.total);
     const due = Math.max(0, grandTotal - paidTotal);
 
-    // Build a separate box for each supplier
-    const supplierBoxes = tripRows.map((r, idx) => {
-      const rBase = num(r.net_qty) * num(r.rate);
-      const rLabor = num(r.labor_charge);
-      const rPaid = allPayments.filter(p => Number(p.ref_id) === Number(r.id))
-                               .reduce((s, p) => s + num(p.amount), 0);
-      
-      return `
-        <div class="doc-supplier-box" style="border: 1px solid #999; padding: 10px; margin-bottom: 15px; page-break-inside: avoid;">
-          <div style="display: flex; justify-content: space-between; border-bottom: 1px solid #ccc; padding-bottom: 5px; margin-bottom: 10px;">
-            <div>
-              <div style="font-size: 9.5px; text-transform: uppercase; color: #555;">Supplier ${idx + 1} of ${tripRows.length} · ${esc(r.invoice)}</div>
-              <div style="font-size: 14px; font-weight: bold;">${esc(supplierNameById.get(r.supplier_id) || "—")}</div>
-              ${(r.contact_person || r.contact_phone) ? `<div style="font-size: 10.5px; color: #444;">${esc([r.contact_person, r.contact_phone].filter(Boolean).join(" · "))}</div>` : ""}
-            </div>
-            <div style="text-align: right; font-size: 10px;">
-              <div>${esc(formatBs(r))}</div>
-              <div>${esc(adStr(r))}</div>
-              <div>${esc(r.status)}</div>
-            </div>
-          </div>
-          
-          <table class="doc-table">
-            <thead>
-              <tr>
-                <th>Material</th>
-                <th class="num">Gross Qty</th>
-                <th class="num">Dust (KG)</th>
-                <th class="num">Net Qty</th>
-                <th class="num">Rate / kg</th>
-                <th class="num">Product Amount</th>
-                <th class="num">Labor</th>
-                <th class="num">Total</th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr>
-                <td>${esc(r.material || "—")}</td>
-                <td class="num">${esc(kg(r.gross_qty))}</td>
-                <td class="num">-${esc(kg(r.dust_qty))}</td>
-                <td class="num">${esc(kg(r.net_qty))}</td>
-                <td class="num">${esc(rupees(r.rate))}</td>
-                <td class="num">${esc(rupees(rBase))}</td>
-                <td class="num">${esc(rupees(rLabor))}</td>
-                <td class="num">${esc(rupees(r.total))}</td>
-              </tr>
-            </tbody>
-          </table>
-
-          <div class="doc-summary" style="margin-top: 10px; width: 250px;">
-            <div><span>Total Amount</span><span>${esc(rupees(r.total))}</span></div>
-            <div><span>Paid</span><span>${esc(rupees(rPaid))}</span></div>
-            <div class="doc-summary-strong"><span>Balance Due</span><span>${esc(rupees(Math.max(0, num(r.total) - rPaid)))}</span></div>
-          </div>
-        </div>
-      `;
-    }).join("");
-
-    const grandBlock = tripRows.length > 1 ? `
-      <div class="doc-summary" style="width: 250px; margin-left: auto; margin-top: 10px;">
-        <div><span>All Orders Total</span><span>${esc(rupees(grandTotal))}</span></div>
-        <div><span>All Paid</span><span>${esc(rupees(paidTotal))}</span></div>
-        <div class="doc-summary-strong"><span>All Balance Due</span><span>${esc(rupees(due))}</span></div>
-      </div>` : "";
-
-    // Transportation Details Block (shared across the trip)
-    const transportBlock = (row.truck_no) ? `
-    ` : "";
+    const supplierName = supplierNameById.get(row.supplier_id) || "—";
+    const rBase = num(row.net_qty) * num(row.rate);
+    const rLabor = num(row.labor_charge);
 
     printVoucher(`
       <div class="doc-sheet">
@@ -484,8 +410,8 @@ export default function Purchases() {
             <div class="doc-company">${esc(company)}</div>
           </div>
           <div class="doc-kind">
-            <div class="doc-title">Purchase Invoice ${tripRows.length > 1 ? '(Shared Truck)' : ''}</div>
-            <div class="doc-no">No. ${esc(tripRows.map(r => r.invoice).join(", "))}</div>
+            <div class="doc-title">Purchase Invoice</div>
+            <div class="doc-no">No. ${esc(row.invoice)}</div>
           </div>
         </div>
 
@@ -493,22 +419,205 @@ export default function Purchases() {
           <div>Date (BS)<strong>${esc(formatBs(row))}</strong></div>
           <div>Date (English)<strong>${esc(adStr(row))}</strong></div>
           <div>Company<strong>${esc(company)}</strong></div>
-          <div>Suppliers<strong>${tripRows.length}</strong></div>
+          <div>Supplier<strong>${esc(supplierName)}</strong></div>
         </div>
 
-        ${supplierBoxes}
-        ${grandBlock}
-        ${transportBlock}
+        <div class="doc-two-col">
+          <div class="doc-box">
+            <div class="doc-box-title">Supplier</div>
+            <div class="doc-box-main">${esc(supplierName)}</div>
+            ${(row.contact_person || row.contact_phone) ? `<div class="doc-box-sub">${esc([row.contact_person, row.contact_phone].filter(Boolean).join(" · "))}</div>` : ""}
+          </div>
+          <div class="doc-box">
+            <div class="doc-box-title">Status</div>
+            <div class="doc-box-main">${esc(row.status)}</div>
+            ${row.truck_no ? `<div class="doc-box-sub">Truck: ${esc(row.truck_no)}</div>` : ""}
+          </div>
+        </div>
 
-        <div class="doc-signatures" style="margin-top: 30px;">
-          <div>Received By: ${esc(row.signature || '')}</div>
-          <div>Authorized By: ${esc(row.paid_by || '')}</div>
+        <div class="doc-section-title">Material</div>
+        <table class="doc-table">
+          <thead>
+            <tr>
+              <th>Material</th>
+              <th class="num">Gross Qty</th>
+              <th class="num">Dust</th>
+              <th class="num">Net Qty</th>
+              <th class="num">Rate / kg</th>
+              <th class="num">Product Amt</th>
+              <th class="num">Labor</th>
+              <th class="num">Total</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>${esc(row.material || "—")}</td>
+              <td class="num">${esc(kg(row.gross_qty))}</td>
+              <td class="num">-${esc(kg(row.dust_qty))}</td>
+              <td class="num">${esc(kg(row.net_qty))}</td>
+              <td class="num">${esc(rupees(row.rate))}</td>
+              <td class="num">${esc(rupees(rBase))}</td>
+              <td class="num">${esc(rupees(rLabor))}</td>
+              <td class="num">${esc(rupees(row.total))}</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <div class="doc-summary">
+          <div><span>Total Amount</span><span>${esc(rupees(grandTotal))}</span></div>
+          <div><span>Paid</span><span>${esc(rupees(paidTotal))}</span></div>
+          <div class="doc-summary-strong"><span>Balance Due</span><span>${esc(rupees(due))}</span></div>
+        </div>
+
+        ${payments.length ? `
+          <div class="doc-section-title">Payment History</div>
+          <table class="doc-table">
+            <thead>
+              <tr>
+                <th>Date</th>
+                <th>Method</th>
+                <th>Note</th>
+                <th class="num">Amount</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${payments.map((p) => `
+                <tr>
+                  <td>${esc(`${p.date_bs_year}/${String(p.date_bs_month).padStart(2, "0")}/${String(p.date_bs_day).padStart(2, "0")}`)}</td>
+                  <td>${esc(p.method || "—")}</td>
+                  <td>${esc(p.note || "—")}</td>
+                  <td class="num">${esc(rupees(p.amount))}</td>
+                </tr>
+              `).join("")}
+            </tbody>
+          </table>
+        ` : ""}
+
+        <div class="doc-signatures">
+          <div>Received By: ${esc(row.signature || "")}</div>
+          <div>Authorized By: ${esc(row.paid_by || "")}</div>
         </div>
 
         <div class="doc-foot">
           Printed on ${esc(new Date().toLocaleString())} from ${esc(company)} management system.
         </div>
-      </div>`);
+      </div>
+    `);
+  }
+
+  /* ---------- Print Entire Trip ---------- */
+  async function printEntireTrip(primaryRow) {
+    const company = primaryRow.company || BRAND;
+    
+    const tripRows = rows.filter(r => r.trip_id === primaryRow.trip_id);
+
+    const allPaymentsPromises = tripRows.map(r => fetchPaymentsForPurchase(r.id));
+    const allPaymentsArrays = await Promise.all(allPaymentsPromises);
+    const allPayments = allPaymentsArrays.flat();
+
+    const paidTotal = allPayments.reduce((s, p) => s + num(p.amount), 0);
+    const grandTotal = tripRows.reduce((s, r) => s + num(r.total), 0);
+    const due = Math.max(0, grandTotal - paidTotal);
+
+    const itemsHtml = tripRows.map(r => {
+      const supplierName = supplierNameById.get(r.supplier_id) || "—";
+      const rBase = num(r.net_qty) * num(r.rate);
+      const rLabor = num(r.labor_charge);
+      
+      return `
+        <tr>
+          <td>${esc(supplierName)}<br/><span style="font-size:9px;color:#555">${esc(r.invoice)}</span></td>
+          <td>${esc(r.material || "—")}</td>
+          <td class="num">${esc(kg(r.gross_qty))}</td>
+          <td class="num">-${esc(kg(r.dust_qty))}</td>
+          <td class="num">${esc(kg(r.net_qty))}</td>
+          <td class="num">${esc(rupees(r.rate))}</td>
+          <td class="num">${esc(rupees(rBase))}</td>
+          <td class="num">${esc(rupees(rLabor))}</td>
+          <td class="num">${esc(rupees(r.total))}</td>
+        </tr>
+      `;
+    }).join("");
+
+    printVoucher(`
+      <div class="doc-sheet">
+        <div class="doc-letterhead">
+          <div class="doc-brand">
+            <div class="doc-company">${esc(company)}</div>
+          </div>
+          <div class="doc-kind">
+            <div class="doc-title">Purchase Invoice (Trip Summary)</div>
+            <div class="doc-no">Truck: ${esc(primaryRow.truck_no || "—")}</div>
+          </div>
+        </div>
+
+        <div class="doc-meta">
+          <div>Date (BS)<strong>${esc(formatBs(primaryRow))}</strong></div>
+          <div>Date (English)<strong>${esc(adStr(primaryRow))}</strong></div>
+          <div>Company<strong>${esc(company)}</strong></div>
+          <div>Suppliers<strong>${tripRows.length}</strong></div>
+        </div>
+
+        <div class="doc-section-title">Materials & Suppliers</div>
+        <table class="doc-table">
+          <thead>
+            <tr>
+              <th>Supplier / Inv</th>
+              <th>Material</th>
+              <th class="num">Gross Qty</th>
+              <th class="num">Dust</th>
+              <th class="num">Net Qty</th>
+              <th class="num">Rate</th>
+              <th class="num">Product Amt</th>
+              <th class="num">Labor</th>
+              <th class="num">Total</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${itemsHtml}
+          </tbody>
+        </table>
+
+        <div class="doc-summary">
+          <div><span>All Orders Total</span><span>${esc(rupees(grandTotal))}</span></div>
+          <div><span>All Paid</span><span>${esc(rupees(paidTotal))}</span></div>
+          <div class="doc-summary-strong"><span>All Balance Due</span><span>${esc(rupees(due))}</span></div>
+        </div>
+
+        ${allPayments.length ? `
+          <div class="doc-section-title">Payment History</div>
+          <table class="doc-table">
+            <thead>
+              <tr>
+                <th>Date</th>
+                <th>Method</th>
+                <th>Note</th>
+                <th class="num">Amount</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${allPayments.map((p) => `
+                <tr>
+                  <td>${esc(`${p.date_bs_year}/${String(p.date_bs_month).padStart(2, "0")}/${String(p.date_bs_day).padStart(2, "0")}`)}</td>
+                  <td>${esc(p.method || "—")}</td>
+                  <td>${esc(p.note || "—")}</td>
+                  <td class="num">${esc(rupees(p.amount))}</td>
+                </tr>
+              `).join("")}
+            </tbody>
+          </table>
+        ` : ""}
+
+        <div class="doc-signatures">
+          <div>Received By: ${esc(primaryRow.signature || "")}</div>
+          <div>Authorized By: ${esc(primaryRow.paid_by || "")}</div>
+        </div>
+
+        <div class="doc-foot">
+          Printed on ${esc(new Date().toLocaleString())} from ${esc(company)} management system.
+        </div>
+      </div>
+    `);
   }
 
   const columns = [
@@ -620,10 +729,13 @@ export default function Purchases() {
           wide
           footer={
             <>
+              {detail.trip_id && rows.filter(r => r.trip_id === detail.trip_id).length > 1 && (
+                <Button onClick={() => printEntireTrip(detail)}>
+                  Print Entire Trip ({rows.filter(r => r.trip_id === detail.trip_id).length} Items)
+                </Button>
+              )}
               <Button onClick={() => printPurchaseInvoice(detail)}>
-                {detail.trip_id && rows.filter(r => r.trip_id === detail.trip_id).length > 1
-                  ? `Print All ${rows.filter(r => r.trip_id === detail.trip_id).length} Orders`
-                  : "Print"}
+                Print This Invoice
               </Button>
               <Button onClick={() => setDetail(null)}>Close</Button>
             </>
@@ -679,7 +791,6 @@ export default function Purchases() {
               (date, status, company, truck, loader) is shared; only the supplier, material, weights and rate are per-line.
             </p>
 
-            {/* ============ SHARED HEADER ============ */}
             <div className="grid grid-cols-2 gap-3.5 mb-5 max-[560px]:grid-cols-1">
               <Field label="Month (BS)">
                 <select className={selectCls} value={header.date_bs_month}
@@ -729,14 +840,13 @@ export default function Purchases() {
                   {BRAND}
                 </div>
               </Field>
-              {/* {============== TRUCK NO =============} */}
               <Field label="Truck No.">
                 <input className={inputCls} value={header.truck_no}
                   onChange={(e) => setHeader((h) => ({ ...h, truck_no: e.target.value }))}
                   placeholder="BA 1 KHA 1234" />
               </Field>
             </div>
-            {/* ============ PURCHASE LINES ============ */}
+
             {lines.map((line, i) => {
               const c = lineComputed(line);
               return (
@@ -886,7 +996,6 @@ function DetailPair({ label, value }) {
   );
 }
 
-/* EditPaymentBlock — unchanged from previous version */
 function EditPaymentBlock({ purchase, supplierName, onPaid }) {
   const [open, setOpen] = useState(false);
   const [amount, setAmount] = useState("");
@@ -902,12 +1011,8 @@ function EditPaymentBlock({ purchase, supplierName, onPaid }) {
   async function reloadPayments() {
     setLoadingPayments(true);
     try {
-      const { items } = await api.get("/api/transactions");
-      setPayments(
-        (items || []).filter(
-          (t) => t.ref_type === "purchase" && Number(t.ref_id) === Number(purchase.id)
-        )
-      );
+      const { items } = await api.get(`/api/purchases/${purchase.id}/payments`);
+      setPayments(items || []);
     } catch {
       setPayments([]);
     } finally {

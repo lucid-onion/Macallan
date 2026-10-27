@@ -144,6 +144,26 @@ router.get("/:id", requirePermission("purchases", "view"), async (req, res, next
 });
 
 /* ========================================================================== */
+/* GET PURCHASE PAYMENTS (New endpoint for safe access)                       */
+/* ========================================================================== */
+router.get("/:id/payments", requirePermission("purchases", "view"), async (req, res, next) => {
+  try {
+    // First verify the purchase exists
+    const purchase = await query(`SELECT id FROM purchases WHERE id = $1 AND deleted_at IS NULL`, [req.params.id]);
+    if (!purchase.rowCount) throw notFound();
+
+    const { rows } = await query(
+      `SELECT id, amount, method, note, date_bs_year, date_bs_month, date_bs_day, date_ad
+         FROM transactions
+        WHERE ref_type = 'purchase' AND ref_id = $1 AND deleted_at IS NULL
+        ORDER BY date_ad ASC, id ASC`,
+      [req.params.id]
+    );
+    res.json({ items: rows });
+  } catch (e) { next(e); }
+});
+
+/* ========================================================================== */
 /* BATCH CREATE                                                               */
 /* ========================================================================== */
 router.post("/batch", requirePermission("purchases", "create"), async (req, res, next) => {
@@ -194,7 +214,8 @@ router.post("/batch", requirePermission("purchases", "create"), async (req, res,
       }
 
       for (const { row, amount_paid, payment_method } of createdRows) {
-        if (amount_paid !== undefined && amount_paid !== null && Number(amount_paid) >= 0) {
+        // Fixed: Changed >= 0 to > 0 to prevent Rs. 0 ghost payments
+        if (amount_paid !== undefined && amount_paid !== null && Number(amount_paid) > 0) {
           const supplierName =
             supplierNameById.get(row.supplier_id) || String(row.supplier_id);
           const paidMethod = payment_method || "Cash";
@@ -261,7 +282,8 @@ router.post("/", requirePermission("purchases", "create"), async (req, res, next
     });
 
     let payment = null;
-    if (amount_paid !== undefined && amount_paid !== null && Number(amount_paid) >= 0) {
+    // Fixed: Changed >= 0 to > 0 to prevent Rs. 0 ghost payments
+    if (amount_paid !== undefined && amount_paid !== null && Number(amount_paid) > 0) {
       const paidMethod = payment_method || "Cash";
       const { rows } = await query(
         `INSERT INTO transactions
